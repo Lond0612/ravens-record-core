@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+dist/
+build/
+# 実行時に書かれるもの・ゲームの画面（著作権のため、リポジトリに入れない）
+logs/
+*.png
+*.jpg
+!docs/**/*.png

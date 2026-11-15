@@ -1,0 +1,41 @@
+[project]
+name = "ravens-record-core"
+version = "0.1.0"
+description = "ARMORED CORE VI のランクマッチ・カスタムマッチを、画面から自動で判定して記録する（非公式）"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.15"
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "mss>=10.2.0",
+    "numpy>=2.5.3",
+    "opencv-python>=5.0.0.93",
+    "psutil>=7.2.2",
+    "pytesseract>=0.3.13",
+    "pywin32>=312; sys_platform == 'win32'",
+]
+
+[project.scripts]
+ravens-record-core = "ravens_record_core.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.4",
+]
+
+# 書き方の点検（uv run ruff check）。整形（ruff format）は使わない: 行の折り方は手で決めている
+[tool.ruff]
+line-length = 160
+extend-exclude = ["src/ravens_record_core/ocr/shape_templates.py", "src/ravens_record_core/ocr/rate_digit_templates.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501", "E402", "E731", "E741", "B905", "B904", "B023"]
