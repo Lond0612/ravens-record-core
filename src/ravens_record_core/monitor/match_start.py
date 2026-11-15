@@ -86,6 +86,8 @@ def _wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher) -> b
     last_no_frame = _no_frame_reads()
 
     while True:
+        if ctx.stop_requested():
+            return False
         # AC6が起動しているかを都度確認
         if not is_process_running(ctx.trigger_exe):
             log("[対戦待機] AC6プロセスが終了したため待機を中断します。")

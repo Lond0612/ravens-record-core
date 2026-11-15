@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import psutil
 
@@ -71,6 +71,7 @@ class MonitorContext:
         self.loading_watcher: LoadingWatcher | None = None         # ロード画面の監視プロセス
         self.custom_detector: subprocess.Popen | None = None       # カスタムマッチのスコアの監視プロセス
         self.status_unreadable_reported = False                    # status_unreadable は、監視の 1 回につき 1 回だけ知らせる
+        self.stop_requested: Callable[[], bool] = lambda: False    # 監視を止めるよう求められたか（Recorder.stop）
 
     # ---- 監視対象 ------------------------------------------------------------
 

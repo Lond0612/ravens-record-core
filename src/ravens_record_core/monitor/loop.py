@@ -53,14 +53,13 @@ class Monitor:
         self.target_name = ctx.config.target_name
         self.match_session: MatchSession | None = None
         self.detector_process: subprocess.Popen | None = None  # スコアの監視（ScoreDetector）
+        # 画面の見張り（run で始める）。後始末（stop_everything）は別のスレッドから呼ばれることがあり、
+        # そのとき ctx.screen は None になるが、ここでは止めたものを持ち続ける（止めたあとに使っても何もしない）
+        self.screen = None
         self.last_heartbeat = time.monotonic()
         self.ready_notified = False  # 初めて記録を進めてよくなったことを、差し込み口に 1 回だけ知らせる
         # 最後に記録した試合の対戦後レート（ロードを確かめられなかった試合で、対戦前レートが読めなかったときの代わりに使う）
         self.last_rate_after: int | None = None
-
-    @property
-    def screen(self):
-        return self.ctx.screen
 
     # ---- 全体 ---------------------------------------------------------------
 
@@ -76,7 +75,8 @@ class Monitor:
         ])
 
         # 画面の状態の見張り（別スレッド）。ロビー・マッチング中・カスタムマッチのルームにいる間だけ動かす
-        screen_watcher(self.ctx)
+        self.ctx.stop_requested = stop_requested
+        self.screen = screen_watcher(self.ctx)
 
         try:
             while not stop_requested():

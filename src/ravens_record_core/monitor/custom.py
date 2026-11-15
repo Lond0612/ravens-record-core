@@ -213,7 +213,7 @@ def run_custom_match_room(ctx: MonitorContext, watcher: ScreenStateWatcher | Non
     last_read = 0.0
 
     while True:
-        if not is_process_running(ctx.trigger_exe) or not ctx.is_ready():
+        if ctx.stop_requested() or not is_process_running(ctx.trigger_exe) or not ctx.is_ready():
             return
         now = time.monotonic()
         if watcher.context_mode in ("SINGLE", "TEAM"):

@@ -42,6 +42,11 @@ class ConfigTest(unittest.TestCase):
         env = children.child_env(Config(trigger_exe="nonexistent_rrc_test.exe"))
         self.assertEqual(env["RRC_TRIGGER_EXE"], "nonexistent_rrc_test.exe")
 
+    def test_child_env_with_json_logs_and_extra(self):
+        # JSON のログの設定のまま、ロード画面の監視へ RRC_JSON_LOGS を重ねて渡しても失敗しない（以前は TypeError で起動できなかった）
+        env = children.child_env(Config(trigger_exe="nonexistent_rrc_test.exe", json_logs=True), RRC_JSON_LOGS="1")
+        self.assertEqual(env["RRC_JSON_LOGS"], "1")
+
     def test_child_command(self):
         with mock.patch.object(children, "is_frozen", return_value=False):
             self.assertEqual(children.child_command("--score-detector")[1:], ["-m", "ravens_record_core", "--score-detector"])
@@ -86,6 +91,37 @@ class HooksTest(unittest.TestCase):
         with mock.patch("ravens_record_core.logger.emit") as emit:
             ctx.set_not_ready_status()
         self.assertEqual(emit.call_args.kwargs["state"], "needs_login")
+
+
+class StopTest(unittest.TestCase):
+    def test_monitor_keeps_working_after_children_are_stopped_from_another_thread(self):
+        # 後始末（stop_everything）のあとに監視ループが 1 周しても落ちない（以前は ctx.screen が None になり AttributeError）
+        from ravens_record_core.monitor import loop
+        ctx = MonitorContext(Config(trigger_exe="nonexistent_rrc_test.exe"))
+        monitor = loop.Monitor(ctx)
+        calls = []
+
+        def stop_requested():
+            calls.append(1)
+            if len(calls) == 1:
+                monitor.stop_everything()  # 別のスレッドの後始末の代わり
+            return len(calls) > 2
+
+        with mock.patch.object(loop, "is_process_running", return_value=False), \
+                mock.patch.object(loop.time, "sleep"), mock.patch.object(loop, "log"), mock.patch.object(loop, "log_block"), \
+                mock.patch("ravens_record_core.logger.emit"):
+            monitor.run(stop_requested=stop_requested)  # 例外を投げない
+        self.assertIsNone(ctx.screen)
+
+    def test_wait_for_match_start_returns_when_stop_is_requested(self):
+        from ravens_record_core.detectors.screen_state_watcher import ScreenStateWatcher
+        from ravens_record_core.monitor import match_start
+        ctx = MonitorContext(Config(trigger_exe="nonexistent_rrc_test.exe"))
+        ctx.stop_requested = lambda: True
+        watcher = ScreenStateWatcher(mode_fn=lambda: None, status_fn=lambda: None)
+        with mock.patch.object(match_start, "is_process_running", return_value=True), \
+                mock.patch.object(match_start, "log"), mock.patch("ravens_record_core.logger.emit"):
+            self.assertFalse(match_start.wait_for_match_start(ctx, watcher))
 
 
 class MatchLogTest(unittest.TestCase):

@@ -39,7 +39,11 @@ def child_command(flag: str) -> list[str]:
 
 
 def child_env(config: Config, **extra: str) -> dict[str, str]:
-    return dict(os.environ, **config.to_env(), **extra)
+    """子プロセスの環境変数（いまの環境変数 ← 設定 ← extra の順に上書きする。同じ名前があっても失敗しない）"""
+    env = dict(os.environ)
+    env.update(config.to_env())
+    env.update(extra)
+    return env
 
 
 def stop_process(proc: subprocess.Popen | None, timeout: float = 5) -> None:
