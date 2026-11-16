@@ -33,7 +33,7 @@
 - Windows 10 / 11
 - Python 3.15 以上（[uv](https://docs.astral.sh/uv/) を推奨）
 - [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)（言語データ `eng`・`jpn`・`kor` を入れる）
-- ゲームの画面モードは **ボーダーレス**（フルスクリーンでは、別の画面に切り替えたときに撮影できません）
+- ゲームの画面モードは **ボーダーレス** がおすすめです。フルスクリーンでも記録できますが、試合中に別の画面に切り替えるとゲームが最小化され、その間は画面を読めません
 
 ### 使い方（コマンド）
 
@@ -153,7 +153,7 @@ Team matches are not recorded.
 - Windows 10 / 11
 - Python 3.15+ ([uv](https://docs.astral.sh/uv/) recommended)
 - [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) with the `eng`, `jpn` and `kor` language data
-- The game must run in **borderless** mode. In fullscreen, the window cannot be captured after you switch to another window.
+- **Borderless** mode is recommended. Fullscreen also works, but if you switch to another window during a match the game is minimized and cannot be read while minimized.
 
 ### Command line
 
