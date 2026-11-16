@@ -30,7 +30,7 @@ from ravens_record_core.monitor.loading import LoadingOutcome, wait_for_loading_
 from ravens_record_core.monitor.map_detection import wait_for_map_detection
 from ravens_record_core.monitor.match_start import wait_for_match_start
 from ravens_record_core.monitor.post_match import wait_for_post_match_and_close_session
-from ravens_record_core.monitor.rate_reader import log_rate_failure
+from ravens_record_core.monitor.rate_reader import log_rate_failure, rate_detail
 from ravens_record_core.monitor.screen import screen_watcher, stop_screen_watcher
 from ravens_record_core.system import aspect_probe, gamewindow
 
@@ -298,6 +298,7 @@ class Monitor:
             log("[レート取得] レートの取得にタイムアウト・失敗しました。")
         if session.rate_before is None:
             session.rate_before_note = rate_trace.get("reason")
+            session.rate_before_detail = rate_detail(rate_trace)
             log_rate_failure("対戦前レート", rate_trace)
 
     def _wait_for_loading(self, watcher: LoadingWatcher | None) -> LoadingOutcome:

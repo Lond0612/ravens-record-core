@@ -250,11 +250,30 @@ def failure_reason(history: list, no_frame: int, last_frame, result) -> dict:
     }
     if reason != "ok" and last_frame is not None:
         try:
-            info["rate_paths"] = _read_paths(crop_roi(last_frame, HOME_RATING_ROI))
-            info["place_paths"] = _read_paths(crop_roi(last_frame, HOME_PLACE_ROI))
+            from ravens_record_core.system import screencap
+            menu, _ = screencap.menu_area(last_frame)
+            info["rate_paths"] = _read_paths(crop_roi(menu, HOME_RATING_ROI))
+            info["place_paths"] = _read_paths(crop_roi(menu, HOME_PLACE_ROI))
+            info["brightness"] = brightness(menu)
         except Exception:
             pass  # 読めなかった理由の調査用の値。取れなければ、付けないだけ
     return info
+
+
+def brightness(frame: np.ndarray) -> dict:
+    """画面の明るさ（グレーの 0〜255。調査用）。
+
+    frame: 画面全体の平均 / rate: レートの欄の平均・最小・最大。
+    真っ黒な画面（撮影の失敗）・白っぽい画面（HDR など）・レートの欄が無い画面（数字の白と背景の差が小さい）を見分ける
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    rate = crop_roi(gray, HOME_RATING_ROI)
+    return {
+        "frame": round(float(gray.mean()), 1),
+        "rate": round(float(rate.mean()), 1),
+        "rate_min": int(rate.min()),
+        "rate_max": int(rate.max()),
+    }
 
 
 

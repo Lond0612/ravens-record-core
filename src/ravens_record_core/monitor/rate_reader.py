@@ -10,6 +10,22 @@ from ravens_record_core.monitor.base import log
 RATE_MAX_CHANGE_PER_MATCH = 400
 # 読み直す回数（それでも離れていれば、対戦後のレートは空のままにする）
 RATE_AFTER_REREADS = 2
+# 1 枚も読めなかった（read_error）・画面を取れなかった（no_frame）ときに、もう一度読むまで待つ秒数。
+# ロビーに戻った直後は、レートの欄がまだ出ていない・撮影の準備ができていないことがあるため
+RATE_AFTER_RETRY_DELAY_SEC = 1.0
+RETRY_REASONS = ("read_error", "no_frame")
+
+# 読めなかった理由のうち、試合の記録（rate_*_detail）に残すもの。画像は残さない（読みの結果と数値だけ）
+_DETAIL_KEYS = ("reason", "frames", "no_frame", "not_s_rank", "read_error", "values", "rate_paths", "place_paths", "brightness")
+
+
+def rate_detail(trace: dict, **extra) -> dict | None:
+    """読めなかった理由（trace）から、試合の記録に残す分を取り出す。読めた（reason が ok）・空なら None"""
+    if not trace or trace.get("reason") in (None, "ok"):
+        return None
+    detail = {k: trace[k] for k in _DETAIL_KEYS if k in trace}
+    detail.update(extra)
+    return detail
 
 
 def log_rate_failure(label: str, trace: dict) -> None:

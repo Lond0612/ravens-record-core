@@ -31,6 +31,8 @@ close() が完了するまで次の MatchSession を作ってはならない（�
   rate_position_after   対戦後の S ランクの順位 / null
   rate_before_note      対戦前レートを読めなかった理由 / null
   rate_after_note       対戦後レートを読めなかった理由 / null
+  rate_before_detail    対戦前レートを読めなかったときの中身（経路ごとの読み・画面の明るさなど。monitor/rate_reader.rate_detail） / null
+  rate_after_detail     対戦後レートを読めなかったときの中身（同上。読み直して読めたときは first_reason・retried だけ） / null
   capture_size          ゲームの画面の大きさ（幅x高さ） / null
   promotion_*           昇格戦の情報（未実装。いつも null）
   session_id            セッション識別子（matched_at ベース）
@@ -97,6 +99,9 @@ class MatchSession:
     # レートを読めなかった理由（RateDetector.failure_reason の reason。読めたら None）。調査用
     rate_before_note:        Optional[str]  = field(default=None, init=False)
     rate_after_note:         Optional[str]  = field(default=None, init=False)
+    # 読めなかったときの中身（rate_reader.rate_detail。画像は含めない）。調査用
+    rate_before_detail:      Optional[dict] = field(default=None, init=False)
+    rate_after_detail:       Optional[dict] = field(default=None, init=False)
     # 撮った画面の大きさ（"1920x1080" など。16:9 以外の利用者の調査用）
     capture_size:            Optional[str]  = field(default=None, init=False)
     promotion_active:        Optional[bool] = field(default=None, init=False)
@@ -311,6 +316,8 @@ class MatchSession:
             "rate_position_after":     self.rate_position_after,
             "rate_before_note":        self.rate_before_note,
             "rate_after_note":         self.rate_after_note,
+            "rate_before_detail":      self.rate_before_detail,
+            "rate_after_detail":       self.rate_after_detail,
             "capture_size":            self.capture_size,
             "promotion_active":        self.promotion_active,
             "promotion_wins_before":   self.promotion_wins_before,

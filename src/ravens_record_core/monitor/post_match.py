@@ -22,7 +22,13 @@ from ravens_record_core.hooks import (
 )
 from ravens_record_core.match_session import MatchSession
 from ravens_record_core.monitor.base import MonitorContext, is_process_running, log
-from ravens_record_core.monitor.rate_reader import log_rate_failure, read_rate_after
+from ravens_record_core.monitor.rate_reader import (
+    RATE_AFTER_RETRY_DELAY_SEC,
+    RETRY_REASONS,
+    log_rate_failure,
+    rate_detail,
+    read_rate_after,
+)
 from ravens_record_core.system import aspect_probe
 
 
@@ -161,16 +167,32 @@ def _read_rate_after(ctx: MonitorContext, match_session: MatchSession) -> None:
         return capture_frame_with_fallback(ctx.trigger_exe)
 
     aspect_probe.observe(capture(), "after_match")
-    # 0.2秒間隔で最大15回（約3秒）試行
+    require_s_rank = match_session.rate_before_note == "not_s_rank"
+
+    def attempt(trace: dict):
+        # 0.2秒間隔で最大15回（約3秒）試行
+        return read_rate_after(match_session.rate_before, capture, trace=trace, require_s_rank=require_s_rank)
+
     trace: dict = {}
-    rate_res = read_rate_after(match_session.rate_before, capture, trace=trace,
-                               require_s_rank=match_session.rate_before_note == "not_s_rank")
+    rate_res = attempt(trace)
+    first_reason = None
+    if not rate_res and trace.get("reason") in RETRY_REASONS and not ctx.stop_requested():
+        # 1 枚も読めなかった: レートの欄がまだ出ていない・撮影の準備ができていないことがあるので、少し待ってもう一度
+        first_reason = trace.get("reason")
+        log(f"[レート取得] 対戦後レートを読めなかったため（理由: {first_reason}）、もう一度読みます...")
+        time.sleep(RATE_AFTER_RETRY_DELAY_SEC)
+        trace = {}
+        rate_res = attempt(trace)
     if rate_res:
         match_session.rate_after = rate_res.rate
         match_session.rate_position_after = rate_res.s_rank_position
+        if first_reason:
+            log("[レート取得] もう一度読んだところ、対戦後レートを読めました。")
+            match_session.rate_after_detail = {"reason": "ok", "first_reason": first_reason, "retried": True}
     else:
         log("[レート取得] レートの取得にタイムアウト・失敗しました。")
         match_session.rate_after_note = trace.get("reason")
+        match_session.rate_after_detail = rate_detail(trace, **({"first_reason": first_reason, "retried": True} if first_reason else {}))
         log_rate_failure("対戦後レート", trace)
 
 
