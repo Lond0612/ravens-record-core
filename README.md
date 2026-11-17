@@ -116,6 +116,8 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
 
 文字の形の見本（`ocr/shape_templates.py`・`ocr/rate_digit_templates.py`）とマップの特徴量（`data/labels_pool.json`）は、ゲームの画面から作った数値のデータです。画面の画像そのものは含めていません。
 
+同梱のマップの見本は 5 マップで計 32 件と少なめで、画面の設定や解像度によっては判定が外れやすくなります。外れる環境では、`<保存先>/map_templates_cache.json` に見本を足せます（形は `{"feature_version": ..., "shared": {マップ名: [特徴量, ...]}, "own": {...}}`。`shared` があれば同梱の見本の代わりに使い、`own` は足します。詳しくは `detectors/map_detector.py` の `template_cache_path()`）。
+
 ### テスト
 
 ```bash
@@ -196,6 +198,10 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
   Field descriptions are in [`match_session.py`](src/ravens_record_core/match_session.py) and [`matchlog.py`](src/ravens_record_core/matchlog.py).
 
 Code comments are written in Japanese.
+
+### Map detection accuracy
+
+The bundled map samples are few (32 across the 5 maps), so detection may miss more often with some display settings or resolutions. You can add your own samples in `<data dir>/map_templates_cache.json` (`{"feature_version": ..., "shared": {map name: [features, ...]}, "own": {...}}`; `shared` replaces the bundled samples and `own` is added to them). See `template_cache_path()` in `detectors/map_detector.py`.
 
 ### License and notice
 
