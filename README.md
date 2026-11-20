@@ -114,7 +114,13 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
 | レート | `detectors/rate_detector.py`・`ocr/rate_digits.py` |
 | 全体の流れ | `monitor/loop.py` |
 
-文字の形の見本（`ocr/shape_templates.py`・`ocr/rate_digit_templates.py`）とマップの特徴量（`data/labels_pool.json`）は、ゲームの画面から作った数値のデータです。画面の画像そのものは含めていません。
+マップの特徴量（`data/labels_pool.json`）は、ゲームの画面から作った色の分布の数値です。画面の画像そのものは含めていません。
+
+#### 文字のテンプレートは同梱していません（注意）
+
+文字の形のテンプレート（`ocr/shape_templates.py`・`ocr/rate_digit_templates.py`）は、ゲームの画面に描かれた文字から作るため、このリポジトリには含めていません。無いときは、見出し・状態・リザルト・レートなどを Tesseract だけで読みます（テンプレートがあるときより、読み違い・読めないことが増えます）。
+
+自分の環境で作る場合は、自分で撮った画面・録画から見本を切り出し（`scripts/harvest_ocr_samples.py`）、`scripts/make_shape_templates.py`・`scripts/make_rate_digit_templates.py` を実行してください。作ったテンプレートは `.gitignore` 済みで、コミットされません。ゲームの画面から作ったものなので、配布・公開はしないでください。
 
 同梱のマップの見本は 5 マップで計 32 件と少なめで、画面の設定や解像度によっては判定が外れやすくなります。外れる環境では、`<保存先>/map_templates_cache.json` に見本を足せます（形は `{"feature_version": ..., "shared": {マップ名: [特徴量, ...]}, "own": {...}}`。`shared` があれば同梱の見本の代わりに使い、`own` は足します。詳しくは `detectors/map_detector.py` の `template_cache_path()`）。
 
@@ -207,5 +213,6 @@ The bundled map samples are few (32 across the 5 maps), so detection may miss mo
 
 - The code is released under the [MIT License](LICENSE).
 - This is an unofficial tool. It is not affiliated with FromSoftware, Inc. or Bandai Namco Entertainment Inc. ARMORED CORE is a trademark or registered trademark of its respective owners.
-- The bundled glyph templates and map features are numeric data derived from the game screen; no screenshots are included.
+- The bundled map features are numeric colour-distribution data derived from the game screen; no screenshots are included.
+- **Glyph templates are not included.** The glyph templates (`ocr/shape_templates.py`, `ocr/rate_digit_templates.py`) are made from text rendered on the game screen, so they are not part of this repository. Without them, headings, status, results and rates are read with Tesseract only (more misreads and misses than with templates). To make your own, cut samples from your own screenshots or recordings (`scripts/harvest_ocr_samples.py`) and run `scripts/make_shape_templates.py` and `scripts/make_rate_digit_templates.py`. The generated files are git-ignored; since they are derived from the game screen, please do not distribute them.
 - Tesseract OCR is separate software (Apache License 2.0).

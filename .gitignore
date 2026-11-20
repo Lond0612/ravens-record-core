@@ -9,3 +9,6 @@ logs/
 *.png
 *.jpg
 !docs/**/*.png
+# 文字のテンプレート（ゲームの画面の文字から作るため、リポジトリに入れない。scripts/make_*_templates.py で作る）
+src/ravens_record_core/ocr/shape_templates.py
+src/ravens_record_core/ocr/rate_digit_templates.py

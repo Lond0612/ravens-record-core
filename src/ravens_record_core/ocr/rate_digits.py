@@ -16,7 +16,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ravens_record_core.ocr.rate_digit_templates import GLYPH_H, GLYPH_W, TEMPLATES
+try:
+    from ravens_record_core.ocr.rate_digit_templates import GLYPH_H, GLYPH_W, TEMPLATES
+except ImportError:  # テンプレートは同梱しない（ゲームの画面から作るため）。scripts/make_rate_digit_templates.py で作れる。無ければこの経路は読まない
+    GLYPH_W, GLYPH_H, TEMPLATES = 20, 28, {}
 
 MIN_SCORE = 0.70  # これより近い数字が無い文字があれば、読めなかった扱い
 MIN_GLYPH_HEIGHT_RATIO = 0.35  # 欄の高さに対する、文字とみなす高さの下限（点のような汚れを外す）
@@ -89,7 +92,7 @@ def classify_glyph(glyph: np.ndarray) -> tuple[str | None, float]:
 
 def read_digits(image: np.ndarray) -> int | None:
     """欄の画像の数字を読む。読めなければ None"""
-    if image is None or image.size == 0:
+    if not TEMPLATES or image is None or image.size == 0:
         return None
     glyphs = split_glyphs(image)
     if not glyphs or len(glyphs) > MAX_DIGITS:

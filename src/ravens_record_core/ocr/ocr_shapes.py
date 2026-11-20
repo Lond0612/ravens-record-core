@@ -16,7 +16,7 @@ from ravens_record_core.ocr import shape_match
 
 try:
     from ravens_record_core.ocr.shape_templates import TEMPLATES
-except ImportError:  # テンプレートを作る前（scripts/make_shape_templates.py）
+except ImportError:  # テンプレートは同梱しない（ゲームの画面から作るため）。scripts/make_shape_templates.py で作れる。無ければ Tesseract だけで読む
     TEMPLATES = {}
 
 
