@@ -28,7 +28,7 @@ import pytesseract
 
 from ravens_record_core import logger
 from ravens_record_core.ocr import ocr_shapes
-from ravens_record_core.system import tesseract_setup
+from ravens_record_core.system import screencap, tesseract_setup
 
 SCHEMA_VERSION = 1
 SPECTATED_SCHEMA_VERSION = 1
@@ -121,6 +121,7 @@ def _log(message: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _crop(frame: np.ndarray, roi: tuple) -> np.ndarray:
+    frame, _ = screencap.game_area(frame)  # 黒い帯の内側に対する割合で切る
     h, w = frame.shape[:2]
     left, top, width, height = roi
     return frame[int(top * h):int((top + height) * h), int(left * w):int((left + width) * w)]

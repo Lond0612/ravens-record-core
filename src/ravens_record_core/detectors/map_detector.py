@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 
 from ravens_record_core import logger, paths
+from ravens_record_core.system import screencap
 from ravens_record_core.detectors.loading_sequence_detector import (
     DEFAULT_DARK_THRESHOLD,
     PreMatchSequenceDetector,
@@ -157,6 +158,7 @@ class FeatureExtractor:
         self.roi = roi
 
     def extract(self, image: np.ndarray) -> np.ndarray:
+        image, _ = screencap.game_area(image)  # 黒い帯の内側に対する割合で切る
         h, w = image.shape[:2]
         x0, y0, x1, y1 = self.roi
         roi_img = image[int(h * y0):int(h * y1), int(w * x0):int(w * x1)]
@@ -387,6 +389,7 @@ def resolve_map(
 
 def sky_dark_ratio(frame: np.ndarray) -> float:
     """空の範囲（SKY_ROI_Y）のうち、暗い画素（V < SKY_DARK_V）の割合（0〜1）"""
+    frame, _ = screencap.game_area(frame)
     h = frame.shape[0]
     sky = frame[int(h * SKY_ROI_Y[0]):int(h * SKY_ROI_Y[1])]
     if sky.size == 0:

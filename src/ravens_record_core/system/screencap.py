@@ -603,8 +603,115 @@ _BAR_BRIGHT = 32         # これより明るい画素を、帯の外（ゲー�
 _BAR_BRIGHT_RATIO = 0.002  # 帯の中で、明るい画素がこの割合未満なら、真っ黒の帯
 
 
-def _is_black(strip: np.ndarray) -> bool:
+def _is_black_strip(strip: np.ndarray) -> bool:
     return strip.size > 0 and float((strip.max(axis=2) > _BAR_BRIGHT).mean()) < _BAR_BRIGHT_RATIO
+
+
+# ---- 帯の位置を画像から求める（v1.7.2〜）----
+# 画像の比率が 16:9 のままでも、中に帯があることがある（例: モニター 2560x1440・ゲームの解像度 2560x1080 のボーダーレスでは、
+# 2560x1440 の中央に 1920x1080 の絵が、上下左右に黒い帯つきで描かれる）。比率だけでは分からないので、
+# 画像の端から続く真っ黒な行・列を数えて、中央にある 16:9 の絵の範囲を求める（上下だけ・左右だけ・上下左右のどれも）。
+# 暗い場面を帯と取り違えないよう、16:9・中央・十分な大きさのときだけ帯とみなし、同じ範囲が続いたときだけ使う。
+
+_CONTENT_STEP = 4             # 間引いて調べる（画素の間隔）
+_CONTENT_EDGE_RATIO = 0.02    # 画面のどこにも、明るい画素がこの割合以上の行が無ければ（ほぼ真っ黒）、判定しない
+_CONTENT_MIN_AREA = 0.3       # 絵の範囲が、画像のこの割合より小さければ、帯とみなさない
+
+
+def _band_len(ratios: np.ndarray) -> int:
+    n = 0
+    for r in ratios:
+        if r >= _BAR_BRIGHT_RATIO:
+            break
+        n += 1
+    return n
+
+
+def find_content_rect(img: Optional[np.ndarray]) -> Optional[tuple[int, int, int, int]]:
+    """黒い帯の内側にある、中央の 16:9 の絵の範囲 (x0, y0, x1, y1)。帯が無ければ画像全体。分からなければ None"""
+    if img is None or img.ndim != 3 or img.size == 0:
+        return None
+    h, w = img.shape[:2]
+    step = _CONTENT_STEP
+    bright = img[::step, ::step].max(axis=2) > _BAR_BRIGHT
+    rows, cols = bright.mean(axis=1), bright.mean(axis=0)
+    if rows.size == 0 or cols.size == 0 or rows.max() < _CONTENT_EDGE_RATIO:
+        return None  # ほぼ真っ黒（暗転・ロード）: 判定しない
+    top, bottom = _band_len(rows) * step, _band_len(rows[::-1]) * step
+    left, right = _band_len(cols) * step, _band_len(cols[::-1]) * step
+    if max(top, bottom, left, right) < _BAR_MIN_PX:
+        return (0, 0, w, h)
+    ih, iw = h - top - bottom, w - left - right
+    if ih <= 0 or iw <= 0:
+        return None
+    # 絵の端が暗いと、測った範囲は少し小さくなる。長い方の辺に合わせて、ちょうど 16:9 にする
+    if iw / ih > GAME_ASPECT:
+        cw, ch = iw, int(round(iw / GAME_ASPECT))
+    else:
+        cw, ch = int(round(ih * GAME_ASPECT)), ih
+    tol = max(step * 2, int(0.02 * max(cw, ch)))
+    if abs(iw - cw) > tol or abs(ih - ch) > tol:
+        return None  # 16:9 にならない: 帯ではなく、暗い場面
+    if abs(left - right) > tol or abs(top - bottom) > tol:
+        return None  # 中央に無い: 帯ではない
+    if cw > w or ch > h or cw * ch < _CONTENT_MIN_AREA * w * h:
+        return None
+    x0, y0 = (w - cw) // 2, (h - ch) // 2
+    if x0 < _BAR_MIN_PX and y0 < _BAR_MIN_PX:
+        return (0, 0, w, h)
+    return (x0, y0, x0 + cw, y0 + ch)
+
+
+def _close(a: tuple, b: tuple, px: int = 8) -> bool:
+    return all(abs(x - y) <= px for x, y in zip(a, b))
+
+
+class ContentLocator:
+    """画像の大きさごとに、帯の内側の範囲を覚えておく（毎回は調べない）。
+    同じ範囲が CONFIRM 回・CONFIRM_SEC 秒以上続いたら確定し、確定後は RECHECK_SEC 秒ごとに確かめ直す。
+    違う範囲が BREAK 回続いたら確定を外す（ボーダーレスでは、ウィンドウの大きさのままゲームの解像度だけ変わることがあるため）。
+    判定できない画像（暗転など）では、確定したものを保つだけ。"""
+    CONFIRM, CONFIRM_SEC, RECHECK_SEC, BREAK, MAX_SIZES = 3, 1.0, 5.0, 3, 4
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._states: dict[tuple[int, int], dict] = {}
+
+    def rect(self, img: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+        h, w = img.shape[:2]
+        now = self.clock()
+        with self._lock:
+            st = self._states.get((w, h))
+            if st is None:
+                if len(self._states) >= self.MAX_SIZES:
+                    self._states.pop(next(iter(self._states)))
+                st = self._states[(w, h)] = {"locked": None, "cand": None, "n": 0, "t0": 0.0, "next": 0.0, "breaks": 0}
+            if st["locked"] is not None and now < st["next"]:
+                return st["locked"]
+            r = find_content_rect(img)
+            st["next"] = now + (self.RECHECK_SEC if st["locked"] is not None else 0.0)
+            if r is None:
+                return st["locked"]
+            if st["locked"] is not None:
+                if _close(r, st["locked"]):
+                    st["breaks"] = 0
+                    return st["locked"]
+                st["breaks"] += 1
+                if st["breaks"] < self.BREAK:
+                    st["next"] = now + 0.5
+                    return st["locked"]
+                st["locked"], st["breaks"] = None, 0
+            if st["cand"] is not None and _close(r, st["cand"]):
+                st["n"] += 1
+            else:
+                st["cand"], st["n"], st["t0"] = r, 1, now
+            if st["n"] >= self.CONFIRM and now - st["t0"] >= self.CONFIRM_SEC:
+                st["locked"], st["next"] = st["cand"], now + self.RECHECK_SEC
+            return st["locked"]
+
+
+_locator = ContentLocator()
 
 
 def game_area(img: Optional[np.ndarray]) -> tuple[Optional[np.ndarray], bool]:
@@ -614,15 +721,21 @@ def game_area(img: Optional[np.ndarray]) -> tuple[Optional[np.ndarray], bool]:
     h, w = img.shape[:2]
     if w <= 0 or h <= 0:
         return img, False
+    # 帯の位置が確定していれば、その内側（上下だけ・左右だけ・上下左右のどれも）
+    rect = _locator.rect(img)
+    if rect is not None and rect != (0, 0, w, h):
+        x0, y0, x1, y1 = rect
+        return img[y0:y1, x0:x1], True
+    # まだ確定していないときは、画像の比率から帯を予想する（v1.4.12〜）
     if w / h < GAME_ASPECT - 0.02:
         content_h = int(round(w / GAME_ASPECT))
         bar = (h - content_h) // 2
-        if bar >= _BAR_MIN_PX and _is_black(img[:bar]) and _is_black(img[h - bar:]):
+        if bar >= _BAR_MIN_PX and _is_black_strip(img[:bar]) and _is_black_strip(img[h - bar:]):
             return img[bar:bar + content_h], True
     elif w / h > GAME_ASPECT + 0.02:
         content_w = int(round(h * GAME_ASPECT))
         bar = (w - content_w) // 2
-        if bar >= _BAR_MIN_PX and _is_black(img[:, :bar]) and _is_black(img[:, w - bar:]):
+        if bar >= _BAR_MIN_PX and _is_black_strip(img[:, :bar]) and _is_black_strip(img[:, w - bar:]):
             return img[:, bar:bar + content_w], True
     return img, False
 

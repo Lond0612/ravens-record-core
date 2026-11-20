@@ -22,7 +22,7 @@ import numpy as np
 import pytesseract
 
 from ravens_record_core.ocr import ocr_shapes
-from ravens_record_core.system import tesseract_setup
+from ravens_record_core.system import screencap, tesseract_setup
 
 # 試合の終わりのスコアとして、ありうる組み合わせ (自分, 相手)
 VALID_SCORES = {(2, 0), (2, 1), (1, 2), (0, 2), (2, 2)}
@@ -50,6 +50,7 @@ RESULT_ROWS = {
 
 
 def _crop(frame: np.ndarray, box: tuple) -> np.ndarray:
+    frame, _ = screencap.game_area(frame)  # 黒い帯の内側に対する割合で切る
     h, w = frame.shape[:2]
     x0, y0, x1, y1 = box
     return frame[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
@@ -195,7 +196,6 @@ def is_result_screen(frame: np.ndarray) -> bool:
 def read_result_screen(frame: np.ndarray) -> Optional[dict]:
     """リザルト画面の、陣営ごとの {"ALPHA": (勝敗, PT), "BETA": (勝敗, PT)}。リザルト画面でなければ None。
     勝敗・PT が読めなかったものは None のまま入れる。横長のモニターでは、中央の 16:9 を読む（screencap.menu_area）"""
-    from ravens_record_core.system import screencap
     frame, _ = screencap.menu_area(frame)
     if not is_result_screen(frame):
         return None

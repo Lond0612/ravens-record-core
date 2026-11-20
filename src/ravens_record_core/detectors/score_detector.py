@@ -543,6 +543,7 @@ def main(argv: list[str] | None = None) -> None:
                         log(f"[警告] もう一つの撮影に失敗しました: {e!r}")
                     metrics2 = None
                     if frame2 is not None:
+                        frame2, _ = screencap.game_area(frame2)  # 黒い帯の内側に対する割合でマスを探す
                         h2, w2 = frame2.shape[:2]
                         metrics2 = judge_boxes(frame2, w2, h2, pending_states2, stable_counters2, current_scores2,
                                                weak=weak_lit2, now=loop_start)
@@ -554,9 +555,9 @@ def main(argv: list[str] | None = None) -> None:
                         box_metrics = metrics2
                     else:
                         img = np.array(sct.grab({"left": left, "top": top, "width": width, "height": height}))
-                        frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                        frame, _ = screencap.game_area(cv2.cvtColor(img, cv2.COLOR_BGRA2BGR))
                         box_metrics = judge_boxes(
-                            frame, width, height, pending_states, stable_counters, current_scores,
+                            frame, frame.shape[1], frame.shape[0], pending_states, stable_counters, current_scores,
                             weak=weak_lit, now=loop_start,
                         )
                         stale_mss.update(frame, loop_start)

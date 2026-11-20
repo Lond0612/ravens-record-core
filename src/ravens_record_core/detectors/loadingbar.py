@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from ravens_record_core.system import screencap
+
 # 1080p での縦の縞（上から: 枠の線、すき間 2、中の帯 7、すき間 2、枠の線）。1 = 明るい、0 = 暗い
 BAR_PATTERN = np.array([1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1], dtype=np.float32)
 # 探す範囲（画面に対する割合）。縦は画面の下のほう、横は右半分
@@ -77,6 +79,7 @@ def detect_loading_bar(frame_bgr: np.ndarray) -> BarResult:
     """画面（ゲームのクライアント領域全体）に、ロード画面の進行バーがあるか"""
     if frame_bgr is None or frame_bgr.size == 0:
         return BarResult(False, 0.0, -1)
+    frame_bgr, _ = screencap.game_area(frame_bgr)  # 黒い帯の内側に対する割合で探す
     h, w = frame_bgr.shape[:2]
     y0, y1 = int(h * SEARCH_Y[0]), int(h * SEARCH_Y[1])
     x0, x1 = int(w * SEARCH_X[0]), int(w * SEARCH_X[1])
