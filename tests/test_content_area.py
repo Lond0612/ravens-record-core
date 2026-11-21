@@ -101,6 +101,18 @@ class ContentLocatorTest(unittest.TestCase):
         self.assertEqual(self.loc.rect(b), (0, 0, 1920, 1080))
 
 
+class ContentLocatorThrottleTest(unittest.TestCase):
+    def test_probes_at_most_every_probe_sec_before_locked(self):
+        t = [0.0]
+        loc = screencap.ContentLocator(clock=lambda: t[0])
+        dark = np.zeros((1080, 1920, 3), np.uint8)
+        with mock.patch.object(screencap, "find_content_rect", wraps=screencap.find_content_rect) as spy:
+            for _ in range(100):  # 1 秒の間に 100 回呼ばれても
+                loc.rect(dark)
+                t[0] += 0.01
+        self.assertLessEqual(spy.call_count, 5)
+
+
 class GameAreaTest(unittest.TestCase):
     def setUp(self):
         self.t = 0.0

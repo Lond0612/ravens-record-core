@@ -672,6 +672,8 @@ class ContentLocator:
     違う範囲が BREAK 回続いたら確定を外す（ボーダーレスでは、ウィンドウの大きさのままゲームの解像度だけ変わることがあるため）。
     判定できない画像（暗転など）では、確定したものを保つだけ。"""
     CONFIRM, CONFIRM_SEC, RECHECK_SEC, BREAK, MAX_SIZES = 3, 1.0, 5.0, 3, 4
+    # 確定する前（暗転中なども）は、調べるのをこの秒数に 1 回までにする（読み取りのたびに呼ばれるため。1 回 2〜4ms）
+    PROBE_SEC = 0.25
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
@@ -687,10 +689,10 @@ class ContentLocator:
                 if len(self._states) >= self.MAX_SIZES:
                     self._states.pop(next(iter(self._states)))
                 st = self._states[(w, h)] = {"locked": None, "cand": None, "n": 0, "t0": 0.0, "next": 0.0, "breaks": 0}
-            if st["locked"] is not None and now < st["next"]:
+            if now < st["next"]:
                 return st["locked"]
             r = find_content_rect(img)
-            st["next"] = now + (self.RECHECK_SEC if st["locked"] is not None else 0.0)
+            st["next"] = now + (self.RECHECK_SEC if st["locked"] is not None else self.PROBE_SEC)
             if r is None:
                 return st["locked"]
             if st["locked"] is not None:
