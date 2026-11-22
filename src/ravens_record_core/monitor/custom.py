@@ -14,7 +14,7 @@ from ravens_record_core.detectors.mode_detector import detect_current_screen_mod
 from ravens_record_core.detectors.screen_state_watcher import ScreenStateWatcher
 from ravens_record_core.hooks import CUSTOM_PARTICIPANT, CUSTOM_SPECTATED
 from ravens_record_core.monitor.base import WATCH_POLL_INTERVAL_SEC, MonitorContext, is_process_running, log
-from ravens_record_core.monitor.children import run_score_detector, stop_process
+from ravens_record_core.monitor.children import run_score_detector, start_loading_watcher, stop_loading_watcher, stop_process
 from ravens_record_core.monitor.screen import screen_watcher
 
 # ルームを離れたかは、ほかの見出し（SINGLE / TEAM）が読めたかで決める（以前の「30 秒見えなければ」の時間切れはなくした）
@@ -152,10 +152,14 @@ def run_custom_match(ctx: MonitorContext, settings) -> None:
     """カスタムマッチ（シングル）の対戦 1 回を記録する（_run_custom_match）。始まりと終わりを、使う側のアプリに知らせる
     （試合のクリップの録画の開始・終了などに使う）"""
     ctx.hooks.on_custom_match_started()
+    # ロード画面の監視（ランクマッチと同じ）: ALPHA の紹介の映像が始まった時刻を知らせる（on_intro_start。クリップの始まりに使う）。
+    # 紹介が始まるか時間切れで、自分で終わる
+    start_loading_watcher(ctx)
     result: tuple[str | None, dict | None] = (None, None)
     try:
         result = _run_custom_match(ctx, settings)
     finally:
+        stop_loading_watcher(ctx)
         ctx.hooks.on_custom_match_ended(*result)
 
 
