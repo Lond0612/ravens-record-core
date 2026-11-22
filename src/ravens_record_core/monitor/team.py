@@ -181,7 +181,7 @@ def _read_result_screen(ctx: MonitorContext, first_frame) -> team_match.TeamResu
             merged.merge(r)
     if merged is not None:
         log(f"[チーム戦] リザルト画面を読みました: {merged.outcomes} {merged.points} 自分の陣営 {merged.own_side} "
-            f"{merged.own_place} 番目 {merged.own_points}PT / マップ {merged.map_raw!r} → {merged.map_match}")
+            f"{merged.own_points}PT / マップ {merged.map_raw!r} → {merged.map_match}")
     return merged
 
 

@@ -5,10 +5,10 @@
 - 見出し「RESULT」・陣営ごとの行（ALPHA / BETA の WIN / LOSE と合計の「n PT」）の位置は、シングルのリザルト画面と同じ
   （match_end の is_result_screen・RESULT_ROWS・_row_outcome を使う）
 - 日時の行の右に、マップの名前（ゲームの言語の表記。例「LOCステーション31」「ボナ・デア砂丘 - A」）
-- 陣営ごとに 3 人の行（その陣営の中で、ポイントの多い順）。自分の行には白い枠が付く。右端にその人の「n PT」
+- 陣営ごとに 3 人の行。自分の行には白い枠が付く。右端にその人の「n PT」（自分の行の陣営と、自分のポイントだけを読む）
 - 単独で見えるのは 2 秒ほど（そのあと、ランクポイント変動のダイアログが重なる）
 
-読まないもの: プレイヤー名・エンブレムなどのプレイヤーの情報、試合の ID（MATCH ID）。
+読まないもの: プレイヤー名・エンブレムなどのプレイヤーの情報、試合の ID（MATCH ID）、チームの中での順位（記録しない方針）。
 
 座標は、運営者の録画（1920x1080）で実測した。ほかの解像度は比で読む（16:9 の中央。screencap.menu_area）。
 """
@@ -48,7 +48,6 @@ class TeamResult:
     outcomes: dict = field(default_factory=dict)      # {"ALPHA": "win" | "lose" | None, "BETA": ...}
     points: dict = field(default_factory=dict)        # {"ALPHA": int | None, "BETA": ...}（陣営の合計）
     own_side: Optional[str] = None                    # 白い枠の付いた行のある陣営
-    own_place: Optional[int] = None                   # 自分の行の順番（陣営の中で 1〜3。ポイントの多い順）
     own_points: Optional[int] = None                  # 自分のポイント
     map_raw: str = ""                                 # マップの名前（読んだ文字のまま）
     map_match: Optional[str] = None                   # 照合したマップの名前（日本語の表記）
@@ -86,7 +85,7 @@ class TeamResult:
             if self.points.get(side) is None:
                 self.points[side] = other.points.get(side)
         if self.own_side is None and other.own_side is not None:
-            self.own_side, self.own_place = other.own_side, other.own_place
+            self.own_side = other.own_side
         if self.own_points is None and other.own_side == self.own_side:
             self.own_points = other.own_points
         if other.map_score > self.map_score:
@@ -139,22 +138,22 @@ def _frame_brightness(cell: np.ndarray) -> float:
     return float(min(top, bottom))
 
 
-def _find_own_row(frame: np.ndarray) -> tuple[Optional[str], Optional[int], Optional[np.ndarray]]:
-    """白い枠の付いた行（自分の行）の (陣営, 順番 1〜3, 行の画像)。見つからなければ (None, None, None)"""
+def _find_own_row(frame: np.ndarray) -> tuple[Optional[str], Optional[np.ndarray]]:
+    """白い枠の付いた行（自分の行）の (陣営, 行の画像)。見つからなければ (None, None)"""
     cells = []
     for side in SIDES:
         x0, x1 = PLAYER_COLUMNS[side]
-        for i, (y0, y1) in enumerate(PLAYER_ROWS):
+        for y0, y1 in PLAYER_ROWS:
             cell = _box(frame, x0 - 0.004, y0 - 0.004, x1 + 0.004, y1 + 0.004)
             if cell.size:
-                cells.append((side, i + 1, _frame_brightness(cell), _box(frame, x0, y0, x1, y1)))
+                cells.append((side, _frame_brightness(cell), _box(frame, x0, y0, x1, y1)))
     if len(cells) < 2:
-        return None, None, None
-    cells.sort(key=lambda c: c[2], reverse=True)
-    if cells[0][2] - cells[1][2] < OWN_FRAME_MIN_DIFF:
-        return None, None, None
-    side, place, _, cell = cells[0]
-    return side, place, cell
+        return None, None
+    cells.sort(key=lambda c: c[1], reverse=True)
+    if cells[0][1] - cells[1][1] < OWN_FRAME_MIN_DIFF:
+        return None, None
+    side, _, cell = cells[0]
+    return side, cell
 
 
 def _player_points(cell: np.ndarray) -> Optional[int]:
@@ -194,7 +193,7 @@ def read_team_result(frame: np.ndarray, with_map: bool = True) -> Optional[TeamR
         row = match_end._crop(frame, box)
         out.outcomes[side] = match_end._row_outcome(row)
         out.points[side] = _team_points(row)
-    out.own_side, out.own_place, cell = _find_own_row(frame)
+    out.own_side, cell = _find_own_row(frame)
     if cell is not None:
         out.own_points = _player_points(cell)
     if with_map:
@@ -235,7 +234,6 @@ def build_payload(played_at, ended_at, result: Optional[TeamResult], banner_outc
         "own_points": own,
         "opp_points": opp,
         "own_score": r.own_points if r.own_side else None,
-        "own_place": r.own_place if r.own_side else None,
         "map_raw": r.map_raw or None,
         # 照合の結果（参考）。正規化は、記録を使う側で、生の文字から行う
         "map_hint": {"match": r.map_match, "score": r.map_score, "lang": r.map_lang} if r.map_match else None,
