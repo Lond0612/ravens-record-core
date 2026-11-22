@@ -111,12 +111,12 @@ def _read_custom_score(score_path: Path) -> tuple[int | None, int | None]:
     return left, right
 
 
-def run_custom_spectated_match(ctx: MonitorContext, settings, started_at: datetime, started: float) -> None:
+def run_custom_spectated_match(ctx: MonitorContext, settings, started_at: datetime, started: float) -> dict | None:
     """観戦の 1 試合を記録する。観戦の画面（カメラのマーク）を確認した直後に呼ぶ。
 
     観戦の画面は常に左が ALPHA・右が BETA なので、ScoreDetector の左右のスコアを、そのまま ALPHA・BETA のラウンド数にする。
     試合の終わりのスコア（2-0・2-1 など）まで読めた試合だけを記録する（切断などで終わりまで読めなければ、記録しない）。
-    プレイヤー名などは読まない（読むのはスコアのマスだけ）。
+    プレイヤー名などは読まない（読むのはスコアのマスだけ）。記録したら、その中身（payload）を返す（記録しなければ None）。
     """
     logs_dir = ctx.config.logs_dir
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -137,7 +137,7 @@ def run_custom_spectated_match(ctx: MonitorContext, settings, started_at: dateti
         logger.emit("custom_spectated_skipped",
                     f"[カスタム] 観戦した対戦の結果を最後まで読み取れなかったため、記録しませんでした（{alpha_wins}-{beta_wins}）",
                     msg_key="event.customSpectatedSkipped")
-        return
+        return None
 
     payload = custom_match.build_spectated_payload(settings, started_at, ended_at, alpha_wins, beta_wins, _app_version(ctx))
     path = matchlog.write_custom_match(ctx.config.logs_dir, CUSTOM_SPECTATED, payload, ended_at)
@@ -145,14 +145,26 @@ def run_custom_spectated_match(ctx: MonitorContext, settings, started_at: dateti
         logger.emit("custom_spectated_saved",
                     f"観戦したカスタムマッチを記録しました: ALPHA {alpha_wins}-{beta_wins} BETA / {settings.summary()}",
                     alpha_wins=alpha_wins, beta_wins=beta_wins, msg_key="event.customSpectatedSaved")
+    return payload
 
 
 def run_custom_match(ctx: MonitorContext, settings) -> None:
+    """カスタムマッチ（シングル）の対戦 1 回を記録する（_run_custom_match）。始まりと終わりを、使う側のアプリに知らせる
+    （試合のクリップの録画の開始・終了などに使う）"""
+    ctx.hooks.on_custom_match_started()
+    result: tuple[str | None, dict | None] = (None, None)
+    try:
+        result = _run_custom_match(ctx, settings)
+    finally:
+        ctx.hooks.on_custom_match_ended(*result)
+
+
+def _run_custom_match(ctx: MonitorContext, settings) -> tuple[str | None, dict | None]:
     """カスタムマッチ（シングル）の対戦 1 回を記録する。対戦の開始の合図（MATCH_START）を検出した直後に呼ぶ。
 
     参加者の画面（左下に AP の表示）になったら ScoreDetector を起動し、ルーム画面に戻ったら結果を確定して記録する。
     観戦の画面（カメラのマーク）になったら、観戦の記録として別に扱う（run_custom_spectated_match）。
-    どちらにもならないままルームに戻った（中止など）なら、記録しない。
+    どちらにもならないままルームに戻った（中止など）なら、記録しない。記録した対戦の (kind, payload) を返す（記録しなければ (None, None)）。
     """
     played_at = datetime.now().astimezone()
     started = time.monotonic()
@@ -163,10 +175,10 @@ def run_custom_match(ctx: MonitorContext, settings) -> None:
     # --- 参加者の画面（左下の AP の表示）か、観戦の画面（カメラのマーク）かを待つ ---
     role = _wait_custom_role(ctx, started)
     if role is None:
-        return
+        return None, None
     if role == "spectator":
-        run_custom_spectated_match(ctx, settings, played_at, started)
-        return
+        spectated = run_custom_spectated_match(ctx, settings, played_at, started)
+        return (CUSTOM_SPECTATED, spectated) if spectated is not None else (None, None)
 
     # --- 対戦中: ScoreDetector でラウンドの勝敗を監視する（ランクマッチと同じ判定） ---
     logs_dir = ctx.config.logs_dir
@@ -195,6 +207,7 @@ def run_custom_match(ctx: MonitorContext, settings) -> None:
         logger.emit("custom_match_saved", f"カスタムマッチを記録しました: {score_text} / {settings.summary()}",
                     own_wins=own_wins, opp_wins=opp_wins,
                     msg_key="event.customSaved" if own_wins is not None else "event.customSavedUnknown")
+    return CUSTOM_PARTICIPANT, payload
 
 
 def run_custom_match_room(ctx: MonitorContext, watcher: ScreenStateWatcher | None = None) -> None:

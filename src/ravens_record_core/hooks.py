@@ -118,3 +118,10 @@ class Hooks:
     def on_custom_match(self, kind: str, payload: dict, path: Path | None) -> bool:
         """カスタムマッチの対戦を保存したとき（kind は CUSTOM_*）。False を返すと「記録しました」のイベントを出さない"""
         return True
+
+    def on_custom_match_started(self) -> None:
+        """カスタムマッチの対戦の開始の合図（MATCH_START）を見つけたとき（参加者か観戦かは、まだ分からない）"""
+
+    def on_custom_match_ended(self, kind: str | None, payload: dict | None) -> None:
+        """カスタムマッチの対戦の監視を終えたとき（必ず呼ぶ）。記録した対戦なら kind（CUSTOM_*）と payload、
+        記録しなかった（中止・観戦の結果を読めなかったなど）なら None"""
