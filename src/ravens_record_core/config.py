@@ -37,6 +37,7 @@ class Config:
     tesseract_dir: Path | None = None   # None なら、同梱 → PATH → よくあるインストール先の順に探す
     json_logs: bool = False             # 標準出力のログを JSON Lines にする
     record_custom: bool = True          # カスタムマッチも記録する
+    record_team: bool = True            # チーム戦（RANK MATCH: TEAM）も記録する（v1.8〜）
     app_version: str | None = None      # 試合ごとの JSON に書く、使う側のアプリのバージョン（無ければライブラリのバージョン）
 
     @property

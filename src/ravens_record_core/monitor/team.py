@@ -1,0 +1,206 @@
+"""チーム戦（RANK MATCH: TEAM）の試合を記録する（v1.8〜。team_match.py）
+
+流れ（シングルのランクマッチと同じところは、同じ部品を使う）:
+  ロビーで「対戦を開始します」を待つ（match_start）→ 対戦前のレート（S ランクだけ。rate_detector）→
+  試合の終わりまで画面を見る（ロード・紹介・3 分の試合）→ 試合の終わりの帯（YOU WIN / YOU LOSE）と、リザルト画面を読む →
+  ロビーへの復帰を待って、対戦後のレート（S ランクだけ）→ 保存（matchlog.write_team_match）
+
+チーム戦のロードはシングルより長い（約 1 分）ので、シングルのロードの判定（loading・map_detection）は使わず、
+リザルト画面が出るまで待つ。マップは、リザルト画面に出る名前を読む。
+"""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime
+
+from ravens_record_core import logger, matchlog
+from ravens_record_core.detectors import match_end, team_match
+from ravens_record_core.detectors.loading_sequence_detector import capture_frame_with_fallback
+from ravens_record_core.detectors.mode_detector import detect_current_screen_mode
+from ravens_record_core.detectors.rate_detector import capture_stable_rate
+from ravens_record_core.monitor.base import MonitorContext, is_process_running, log
+from ravens_record_core.monitor.children import start_loading_watcher, stop_loading_watcher
+from ravens_record_core.monitor.match_start import wait_for_match_start
+from ravens_record_core.monitor.rate_reader import log_rate_failure, read_rate_after
+from ravens_record_core.system import screencap
+
+# 対戦の開始の合図から、リザルト画面が出るまでを待つ最長の秒数（ロード約 1 分 ＋ 紹介 ＋ 試合 3 分 ＋ 余裕）
+TEAM_MATCH_MAX_SEC = 600.0
+# 対戦の開始の合図から、試合の終わりの帯を探し始めるまでの秒数（試合は 3 分の時間切れで終わる。
+# 試合中の爆発などの色で、帯の文字の読み取りを何度も走らせないため）
+BANNER_SEARCH_AFTER_SEC = 150.0
+# 画面を見る間隔（試合中・帯を探す間・リザルト画面を読む間）
+POLL_SEC = 1.0
+BANNER_POLL_SEC = 0.3
+RESULT_POLL_SEC = 0.25
+# リザルト画面を読み続ける最長の秒数（単独で見えるのは 2 秒ほど。そのあとランクポイント変動のダイアログが重なる）
+RESULT_READ_SEC = 3.0
+# 帯を見たあと、リザルト画面が出るまで待つ最長の秒数
+RESULT_WAIT_AFTER_BANNER_SEC = 25.0
+# 試合のあと、チーム戦のロビーへの復帰を待つ最長の秒数
+LOBBY_RETURN_TIMEOUT_SEC = 60.0
+# 試合中、自分の陣営（上の左の見出しの色）を読む間隔
+SIDE_READ_INTERVAL_SEC = 5.0
+
+
+def run_team_lobby(ctx: MonitorContext, watcher) -> None:
+    """チーム戦のロビー: 対戦の開始を待ち、見つけたらその試合を記録する（ロビーを離れたら戻る）"""
+    if wait_for_match_start(ctx, watcher, mode="TEAM"):
+        record_team_match(ctx)
+
+
+def record_team_match(ctx: MonitorContext) -> dict | None:
+    """チーム戦の試合 1 回を記録する。対戦の開始の合図の直後に呼ぶ。記録した payload を返す（記録しなければ None）。
+    始まりと終わりを、使う側のアプリに知らせる（試合のクリップの録画などに使う）"""
+    ctx.hooks.on_team_match_started()
+    # ロード画面の監視（ランクマッチと同じ）: ALPHA の紹介の映像が始まった時刻を知らせる（on_intro_start。クリップの始まりに使う）
+    start_loading_watcher(ctx)
+    payload = None
+    try:
+        payload = _record(ctx)
+    finally:
+        stop_loading_watcher(ctx, grace_sec=0.0)
+        ctx.hooks.on_team_match_ended(payload)
+    return payload
+
+
+def _capture(ctx: MonitorContext):
+    return capture_frame_with_fallback(ctx.trigger_exe)
+
+
+def _record(ctx: MonitorContext) -> dict | None:
+    played_at = datetime.now().astimezone()
+    started = time.monotonic()
+    logger.emit("team_match_detected", "[チーム戦] 対戦の開始を検出しました", msg_key="event.teamDetected")
+    ctx.set_status("loading", "チーム戦の対戦を検出。ロード中です", "status.teamLoading")
+
+    rate_before, rate_note = _read_rate_before(ctx)
+    ctx.set_status("in_match", "チーム戦の対戦中です", "status.teamInMatch")
+
+    ended = _watch_until_result(ctx, started)
+    if ended is None:
+        return None
+    result, banner, hud_side = ended
+    ended_at = datetime.now().astimezone()
+    ctx.set_status("post_match", "チーム戦の対戦が終了しました。結果を保存しています", "status.teamPostMatch")
+
+    rate_after = None
+    if (rate_before is not None or rate_note != "not_s_rank") and _wait_for_team_lobby(ctx):
+        rate_after = _read_rate_after(ctx, rate_before, rate_note)
+
+    payload = team_match.build_payload(played_at, ended_at, result, banner, hud_side, rate_before, rate_after, _app_version(ctx))
+    if payload["result"] is None:
+        logger.emit("team_match_skipped", "[チーム戦] 試合の結果を読み取れなかったため、記録しませんでした",
+                    level="warn", msg_key="event.teamSkipped")
+        return None
+    path = matchlog.write_team_match(ctx.config.logs_dir, payload, ended_at)
+    if ctx.hooks.on_team_match(payload, path):
+        own, opp = payload.get("own_points"), payload.get("opp_points")
+        score = f"{own}-{opp}" if own is not None and opp is not None else "ポイント不明"
+        logger.emit("team_match_saved", f"チーム戦を記録しました: {payload['result'].upper()} {score} / "
+                    f"{(payload.get('map_hint') or {}).get('match') or payload.get('map_raw') or 'マップ不明'}",
+                    result=payload["result"], own_points=own, opp_points=opp, msg_key="event.teamSaved")
+    return payload
+
+
+def _read_rate_before(ctx: MonitorContext) -> tuple[int | None, str | None]:
+    """対戦前のレート（S ランクのときだけ。ロビーの MATCH INFO の配置はシングルと同じ）"""
+    trace: dict = {}
+    res = capture_stable_rate(lambda: _capture(ctx), trace=trace)
+    if res and res.is_s_rank:
+        return res.rate, None
+    if res:
+        log("[チーム戦] Sランクではないため、レートは記録しません。")
+        return None, "not_s_rank"
+    log_rate_failure("対戦前レート（チーム戦）", trace)
+    return None, trace.get("reason")
+
+
+def _read_rate_after(ctx: MonitorContext, rate_before: int | None, rate_note: str | None) -> int | None:
+    trace: dict = {}
+    res = read_rate_after(rate_before, lambda: _capture(ctx), trace=trace, require_s_rank=rate_note == "not_s_rank")
+    if res:
+        return res.rate
+    log_rate_failure("対戦後レート（チーム戦）", trace)
+    return None
+
+
+def _watch_until_result(ctx: MonitorContext, started: float):
+    """リザルト画面を読み終えるまで待つ。(リザルト画面の読み取り | None, 帯の勝敗 | None, 試合中に読んだ自分の陣営 | None)。
+    試合が終わらないまま AC6 が閉じた・ほかのモードへ移った・時間切れなら None"""
+    banner: str | None = None
+    banner_at: float | None = None
+    hud_side: str | None = None
+    last_side_read = 0.0
+    last_mode_check = 0.0
+    while True:
+        if ctx.stop_requested() or not is_process_running(ctx.trigger_exe):
+            log("[チーム戦] AC6 が閉じられた（または監視を止めた）ため、記録を中断します。")
+            return None
+        now = time.monotonic()
+        elapsed = now - started
+        if elapsed > TEAM_MATCH_MAX_SEC or (banner_at is not None and now - banner_at > RESULT_WAIT_AFTER_BANNER_SEC):
+            if banner is not None:
+                log("[チーム戦] リザルト画面を読めないまま時間が過ぎました。試合の終わりの帯の勝敗で記録します。")
+                return None, banner, hud_side
+            log("[チーム戦] 試合の終わりを確認できないまま時間が過ぎました。記録しません。")
+            return None
+        frame = _capture(ctx)
+        if frame is not None:
+            result = team_match.read_team_result(frame, with_map=False)
+            if result is not None:
+                return _read_result_screen(ctx, frame), banner, hud_side
+            if hud_side is None and now - last_side_read >= SIDE_READ_INTERVAL_SEC:
+                last_side_read = now
+                hud_side = match_end.read_own_side(frame)
+            if elapsed >= BANNER_SEARCH_AFTER_SEC and banner is None:
+                b = match_end.read_banner(frame)
+                if b is not None and b[0] == "final":
+                    banner, banner_at = b[2], now
+                    log(f"[チーム戦] 試合の終わりの帯を読みました: YOU {banner.upper()}")
+        # 試合の前（ロード中）にロビーへ戻った（対戦が流れた）・ほかのモードへ移ったかを、ときどき確かめる
+        if banner is None and now - last_mode_check >= 10.0:
+            last_mode_check = now
+            mode = detect_current_screen_mode(ctx.trigger_exe, in_match=True).mode
+            if mode in ("SINGLE", "CUSTOM") or (mode == "TEAM" and elapsed > 45.0):
+                log(f"[チーム戦] 試合の終わりを確認しないまま {mode} の画面に戻りました。記録しません。")
+                return None
+        time.sleep(RESULT_POLL_SEC if banner is not None else BANNER_POLL_SEC if elapsed >= BANNER_SEARCH_AFTER_SEC else POLL_SEC)
+
+
+def _read_result_screen(ctx: MonitorContext, first_frame) -> team_match.TeamResult | None:
+    """リザルト画面を、見えている間（2 秒ほど）何枚か読んで、読めたところを合わせる"""
+    merged = team_match.read_team_result(first_frame)
+    end = time.monotonic() + RESULT_READ_SEC
+    while merged is not None and time.monotonic() < end and not (merged.complete and merged.own_points is not None and merged.map_match):
+        time.sleep(RESULT_POLL_SEC)
+        frame = _capture(ctx)
+        r = team_match.read_team_result(frame) if frame is not None else None
+        if r is not None:
+            merged.merge(r)
+    if merged is not None:
+        log(f"[チーム戦] リザルト画面を読みました: {merged.outcomes} {merged.points} 自分の陣営 {merged.own_side} "
+            f"{merged.own_place} 番目 {merged.own_points}PT / マップ {merged.map_raw!r} → {merged.map_match}")
+    return merged
+
+
+def _wait_for_team_lobby(ctx: MonitorContext) -> bool:
+    """チーム戦のロビーへの復帰を待つ。戻れば True。
+    リザルト画面にも「RANK MATCH: TEAM」の文字があるため、リザルト画面の間は戻ったとみなさない"""
+    start = time.monotonic()
+    while time.monotonic() - start <= LOBBY_RETURN_TIMEOUT_SEC:
+        if not is_process_running(ctx.trigger_exe):
+            return False
+        frame = _capture(ctx)
+        on_result = frame is not None and match_end.is_result_screen(screencap.menu_area(frame)[0])
+        if not on_result and detect_current_screen_mode(ctx.trigger_exe).mode == "TEAM":
+            return True
+        time.sleep(0.3)
+    log("[チーム戦] 60 秒以内にチーム戦のロビーへの復帰を確認できませんでした（対戦後のレートは読みません）。")
+    return False
+
+
+def _app_version(ctx: MonitorContext) -> str:
+    from ravens_record_core import __version__
+    return ctx.config.app_version or __version__

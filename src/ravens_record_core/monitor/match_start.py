@@ -28,23 +28,26 @@ STATUS_UNREADABLE_MIN_BAND_READS = 60
 # いまは「対戦を開始します」が出たときに、最後に読めた見出しが SINGLE かどうかで、ランクマッチかを決める（ScreenStateWatcher）。
 
 
-def wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher | None = None) -> bool:
-    """ランクマッチ（SINGLE）のロビーで、「対戦開始」を検出するまで待機する。
+def wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher | None = None, mode: str = "SINGLE") -> bool:
+    """ランクマッチ（mode: SINGLE / TEAM）のロビーで、「対戦開始」を検出するまで待機する。
 
     画面は、見張り（ScreenStateWatcher）が並行して約 1 秒ごとに読む。ここではその結果を確かめるだけ。
     時間切れは無い（マッチング中・キャンセル後・チャット中などで見出しが読めない間も待ち続ける）。
 
     Returns:
-        True  : 最後に読めた見出しが SINGLE の状態で、「対戦を開始します」を検出した。
-        False : AC6プロセスが終了／TEAM・カスタムマッチの見出しを読んだ（ランクマッチ以外へ移った）ため、待機を中断すべき状態。
+        True  : 最後に読めた見出しが mode の状態で、「対戦を開始します」を検出した。
+        False : AC6プロセスが終了／ほかの見出し（SINGLE・TEAM・カスタムマッチ）を読んだため、待機を中断すべき状態。
     """
     watcher = watcher or screen_watcher(ctx)
-    ctx.set_status("matchmaking", "ロビー（ランクマッチ）。対戦の開始を待機中です", "status.rankedLobby")
+    if mode == "TEAM":
+        ctx.set_status("matchmaking", "ロビー（チーム戦）。対戦の開始を待機中です", "status.teamLobby")
+    else:
+        ctx.set_status("matchmaking", "ロビー（ランクマッチ）。対戦の開始を待機中です", "status.rankedLobby")
     log("[対戦待機] MATCH_START（対戦を開始します）を待機中...")
     watcher.set_active(True)
     status_detector.keep_unread_strips = True  # 読めなかったときの帯を、端末に数枚残す
     try:
-        return _wait_for_match_start(ctx, watcher)
+        return _wait_for_match_start(ctx, watcher, mode)
     finally:
         status_detector.keep_unread_strips = False
 
@@ -77,7 +80,7 @@ def _maybe_report_status_unreadable(ctx: MonitorContext, watcher: ScreenStateWat
     ctx.hooks.on_issue(ISSUE_STATUS_UNREADABLE, started_at=datetime.now().astimezone() - timedelta(seconds=waited_sec), detail=detail)
 
 
-def _wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher) -> bool:
+def _wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher, mode: str = "SINGLE") -> bool:
     last_status_log = 0.0
     wait_started = time.monotonic()
     reads_at_start = _band_unread_reads()
@@ -95,19 +98,19 @@ def _wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher) -> b
 
         event = watcher.take_match_start()
         if event is not None:
-            if event.context_mode == "SINGLE":
+            if event.context_mode == mode:
                 watcher.set_active(False)  # ここからは、ロード監視・マップ判定・スコアが画面を見る
                 logger.emit("match_detected", f"[対戦開始] MATCH_START を検出しました (raw='{event.raw_text}')。ローディングシーケンスを監視します。")
                 ctx.set_status("loading", "対戦を検出。ロード中です", "status.loading")
                 return True
-            log(f"[対戦待機] 対戦開始を検出しましたが、ランクマッチ（SINGLE）のロビーからではないため記録しません "
+            log(f"[対戦待機] 対戦開始を検出しましたが、ランクマッチ（{mode}）のロビーからではないため記録しません "
                 f"(最後に読めた見出し={event.context_mode})。")
             return False
 
         # ランクマッチ以外の見出しを読んだら、待機をやめる（呼び出し元が、TEAM・カスタムマッチの処理に移る）
         context = watcher.context_mode
-        if context == "TEAM":
-            log("[対戦待機] TEAMモードへ遷移したため待機を中断します。")
+        if context in ("SINGLE", "TEAM") and context != mode:
+            log(f"[対戦待機] {context}モードへ遷移したため待機を中断します。")
             return False
         if context == "CUSTOM":
             log("[対戦待機] カスタムマッチのルームへ移ったため待機を中断します。")

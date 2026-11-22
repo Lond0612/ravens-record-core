@@ -55,7 +55,7 @@ class FakeClock:
 
 
 class WaitForMatchStartTests(unittest.TestCase):
-    def run_wait(self, modes, statuses, initial_context="SINGLE", running_for=None):
+    def run_wait(self, modes, statuses, initial_context="SINGLE", running_for=None, lobby="SINGLE"):
         """modes / statuses: 見張りの読み取り 1 回（1 秒）ごとの値（足りなくなったら最後の値を使い続ける）。
         initial_context: 待機を始める前に読めていた見出し（呼び出し元は、SINGLE を読んでから待機に入る）"""
         clock = FakeClock()
@@ -78,7 +78,7 @@ class WaitForMatchStartTests(unittest.TestCase):
              mock.patch.object(ctx, "set_status"), \
              mock.patch.object(match_start, "log"), \
              mock.patch.object(match_start.logger, "emit"):
-            return match_start.wait_for_match_start(ctx, watcher), clock
+            return match_start.wait_for_match_start(ctx, watcher, mode=lobby), clock
 
     def test_ranked_lobby_then_match_start_is_recorded(self):
         result, _ = self.run_wait(
@@ -117,6 +117,16 @@ class WaitForMatchStartTests(unittest.TestCase):
 
     def test_team_mode_stops_waiting(self):
         result, _ = self.run_wait(modes=[mode("TEAM")], statuses=[status(None)])
+        self.assertFalse(result)
+
+    def test_team_lobby_then_match_start_is_recorded_as_team(self):
+        # チーム戦（v1.8〜）: チーム戦のロビーから待つときは、TEAM の見出しのまま対戦開始を見つけたら記録する
+        result, _ = self.run_wait(modes=[mode("TEAM")] * 5, statuses=[status("MATCHING"), status("MATCH_START")],
+                                  initial_context="TEAM", lobby="TEAM")
+        self.assertTrue(result)
+
+    def test_team_lobby_stops_waiting_on_single_heading(self):
+        result, _ = self.run_wait(modes=[mode("SINGLE")], statuses=[status(None)], initial_context="TEAM", lobby="TEAM")
         self.assertFalse(result)
 
     def test_game_exit_stops_waiting(self):

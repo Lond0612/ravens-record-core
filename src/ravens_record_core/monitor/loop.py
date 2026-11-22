@@ -32,6 +32,7 @@ from ravens_record_core.monitor.match_start import wait_for_match_start
 from ravens_record_core.monitor.post_match import wait_for_post_match_and_close_session
 from ravens_record_core.monitor.rate_reader import log_rate_failure, rate_detail
 from ravens_record_core.monitor.screen import screen_watcher, stop_screen_watcher
+from ravens_record_core.monitor.team import run_team_lobby
 from ravens_record_core.system import aspect_probe, gamewindow
 
 # AC6プロセス起動チェック・モード判定の監視間隔（秒）
@@ -129,14 +130,20 @@ class Monitor:
         context = self.screen.context_mode
         ranked_lobby = current_mode == "SINGLE" or (idle and current_mode is None and context == "SINGLE")
         custom_room = idle and (current_mode == "CUSTOM" or (current_mode is None and context == "CUSTOM"))
+        team_lobby = idle and (current_mode == "TEAM" or (current_mode is None and context == "TEAM"))
 
         if ranked_lobby:
             self._on_ranked_lobby(mode_result)
+        elif team_lobby and ctx.config.record_team:
+            # チーム戦のロビー（v1.8〜）。ランクマッチ（SINGLE）の記録とは別の流れで記録する（monitor/team.py）
+            run_team_lobby(ctx, self.screen)
+            ctx.set_status("ac6_detected", "AC6を検出しました。ロビー画面を待機中です", "status.ac6Detected")
         elif current_mode == "TEAM":
             if self.detector_process is not None:
                 log("[モード判定] TEAM戦を判定したため、ScoreDetector を停止します。")
             self.stop_score_detector()
-            ctx.set_status("ac6_detected", "TEAM戦のため記録対象外です", "status.teamNotRecorded")
+            if not ctx.config.record_team:
+                ctx.set_status("ac6_detected", "TEAM戦のため記録対象外です", "status.teamNotRecorded")
         elif custom_room and ctx.config.record_custom:
             # カスタムマッチのルーム画面。ランクマッチの記録とは別の流れで記録する（ランクマッチの試合の途中なら、何もしない）
             run_custom_match_room(ctx, self.screen)

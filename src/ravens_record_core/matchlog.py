@@ -5,6 +5,7 @@
   ランクマッチ        YYYY-MM-DD_HH-MM-SS_自分-相手_session.json        （MatchSession.to_log_dict。match_session.py を参照）
   カスタムマッチ      YYYY-MM-DD_HH-MM-SS_custom_自分-相手.json          （custom_match.build_payload ＋ 下の項目）
   観戦したカスタム    YYYY-MM-DD_HH-MM-SS_custom_spectated_ALPHA-BETA.json（custom_match.build_spectated_payload ＋ 下の項目）
+  チーム戦            YYYY-MM-DD_HH-MM-SS_team_自チーム-相手.json         （team_match.build_payload ＋ 下の項目）
   読めなかったスコアは X。カスタムマッチの JSON には、payload に加えて log_schema・kind・ended_at・core_version を書く。
 
 JSON Lines（JsonlFileSink）: logger のイベントを 1 行 1 件で追記する。
@@ -65,6 +66,30 @@ def write_custom_match(logs_dir: Path, kind: str, payload: dict, ended_at: datet
         logger.log(f"[カスタム] [警告] 試合の JSON を保存できませんでした: {e!r}", level="warn")
         return None
     logger.log(f"[カスタム] 試合の JSON を保存しました: {path}")
+    return path
+
+
+def write_team_match(logs_dir: Path, payload: dict, ended_at: datetime) -> Path | None:
+    """チーム戦の試合 1 回を JSON に保存する（保存できなければ None。記録の流れは止めない）"""
+    try:
+        stamp = datetime.fromisoformat(payload["played_at"]).strftime("%Y-%m-%d_%H-%M-%S")
+    except (KeyError, TypeError, ValueError):
+        stamp = ended_at.strftime("%Y-%m-%d_%H-%M-%S")
+    name = f"{stamp}_team_{_score_text(payload.get('own_points'), payload.get('opp_points'))}.json"
+    data = {
+        **payload,
+        "log_schema": CUSTOM_LOG_SCHEMA_VERSION,
+        "kind": "team",
+        "ended_at": payload.get("ended_at") or ended_at.astimezone().isoformat(timespec="seconds"),
+        "core_version": __version__,
+    }
+    path = Path(logs_dir) / name
+    try:
+        write_json_atomic(path, data)
+    except OSError as e:
+        logger.log(f"[チーム戦] [警告] 試合の JSON を保存できませんでした: {e!r}", level="warn")
+        return None
+    logger.log(f"[チーム戦] 試合の JSON を保存しました: {path}")
     return path
 
 

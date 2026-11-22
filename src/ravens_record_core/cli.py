@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trigger-exe", help="監視するゲームの実行ファイル名（既定は armoredcore6.exe）")
     parser.add_argument("--tesseract-dir", type=Path, help="tesseract.exe のあるフォルダ")
     parser.add_argument("--no-custom", action="store_true", help="カスタムマッチを記録しない")
+    parser.add_argument("--no-team", action="store_true", help="チーム戦を記録しない")
     return parser
 
 
@@ -85,6 +86,7 @@ def main(argv: list[str] | None = None) -> None:
         tesseract_dir=args.tesseract_dir,
         json_logs=True if args.json else None,
         record_custom=False if args.no_custom else None,
+        record_team=False if args.no_team else None,
     )
     if args.log_file:
         logger.add_sink(JsonlFileSink(args.log_file, include_logs=not args.events_only))

@@ -122,6 +122,18 @@ class Hooks:
     def on_custom_match_started(self) -> None:
         """カスタムマッチの対戦の開始の合図（MATCH_START）を見つけたとき（参加者か観戦かは、まだ分からない）"""
 
+    # ---- チーム戦（v1.8〜） ----------------------------------------------------------
+
+    def on_team_match_started(self) -> None:
+        """チーム戦の対戦の開始の合図（「対戦を開始します」）を見つけたとき"""
+
+    def on_team_match(self, payload: dict, path: Path | None) -> bool:
+        """チーム戦の試合を保存したとき（payload は team_match.build_payload）。False を返すと「記録しました」のイベントを出さない"""
+        return True
+
+    def on_team_match_ended(self, payload: dict | None) -> None:
+        """チーム戦の試合の監視を終えたとき（必ず呼ぶ）。記録した試合なら payload、記録しなかったなら None"""
+
     def on_custom_role(self, role: str, own_side: str | None) -> None:
         """カスタムマッチの対戦の画面が、参加者（"participant"）か観戦（"spectator"）かが決まったとき。
         own_side: 参加者のときの自分の陣営（"ALPHA" / "BETA"。試合中の画面の上の見出しの色から読む。読めなければ None）"""
