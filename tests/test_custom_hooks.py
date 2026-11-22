@@ -17,6 +17,9 @@ class Recorder(Hooks):
     def on_custom_match_ended(self, kind, payload):
         self.calls.append(("ended", kind, payload))
 
+    def on_custom_role(self, role, own_side):
+        self.calls.append(("role", role, own_side))
+
 
 class CustomHooksTest(unittest.TestCase):
     def setUp(self):
@@ -40,6 +43,44 @@ class CustomHooksTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 custom.run_custom_match(self.ctx, None)
         self.assertEqual(self.hooks.calls, [("started",), ("ended", None, None)])
+
+
+
+class CustomRoleTest(unittest.TestCase):
+    """参加者か観戦かが決まったら、自分の陣営（参加者のとき）と一緒に知らせる（クリップの表紙に使う）"""
+
+    def setUp(self):
+        self.hooks = Recorder()
+        self.ctx = mock.Mock(hooks=self.hooks, trigger_exe="x.exe")
+        for p in (mock.patch.object(custom, "is_process_running", return_value=True),
+                  mock.patch.object(custom, "capture_frame_with_fallback", return_value=object()),
+                  mock.patch.object(custom.time, "sleep")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def role(self, ap=False, camera=False, sides=()):
+        with mock.patch.object(custom.custom_match, "has_spectator_camera", return_value=camera), \
+             mock.patch.object(custom.custom_match, "has_ap_hud", return_value=ap), \
+             mock.patch.object(custom, "read_own_side", side_effect=list(sides) or [None] * 10):
+            return custom._wait_custom_role(self.ctx, custom.time.monotonic())
+
+    def test_participant_with_own_side(self):
+        self.assertEqual(self.role(ap=True, sides=["BETA"]), "participant")
+        self.assertEqual(self.hooks.calls, [("role", "participant", "BETA")])
+
+    def test_participant_side_is_read_again_until_visible(self):
+        self.assertEqual(self.role(ap=True, sides=[None, None, "ALPHA"]), "participant")
+        self.assertEqual(self.hooks.calls, [("role", "participant", "ALPHA")])
+
+    def test_participant_side_unknown(self):
+        self.assertEqual(self.role(ap=True), "participant")
+        self.assertEqual(self.hooks.calls, [("role", "participant", None)])
+
+    def test_spectator_has_no_side(self):
+        clock = iter(range(0, 1000))
+        with mock.patch.object(custom.time, "monotonic", side_effect=lambda: next(clock)):
+            self.assertEqual(self.role(camera=True), "spectator")
+        self.assertEqual(self.hooks.calls, [("role", "spectator", None)])
 
 
 if __name__ == "__main__":

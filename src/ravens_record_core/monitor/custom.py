@@ -10,6 +10,7 @@ from pathlib import Path
 from ravens_record_core import logger, matchlog
 from ravens_record_core.detectors import custom_match
 from ravens_record_core.detectors.loading_sequence_detector import capture_frame_with_fallback
+from ravens_record_core.detectors.match_end import read_own_side
 from ravens_record_core.detectors.mode_detector import detect_current_screen_mode
 from ravens_record_core.detectors.screen_state_watcher import ScreenStateWatcher
 from ravens_record_core.hooks import CUSTOM_PARTICIPANT, CUSTOM_SPECTATED
@@ -27,6 +28,9 @@ CUSTOM_HUD_WAIT_SEC = 300.0
 # 観戦と判断するのに、カメラのマークが続けて見えている必要のある秒数と回数（一瞬の誤検出で観戦にしない）
 CUSTOM_CAMERA_MIN_SEC = 2.0
 CUSTOM_CAMERA_MIN_FRAMES = 3
+# 参加者の画面になってから、自分の陣営（上の見出しの色）を読み直す回数と間隔（秒）。AP の表示と同時に出ていないことがあるため
+CUSTOM_SIDE_RETRIES = 4
+CUSTOM_SIDE_RETRY_SEC = 0.5
 # 対戦中（スコアの監視中）の最長の秒数。超えたら、結果不明として記録を閉じる
 CUSTOM_MATCH_MAX_SEC = 2400.0
 
@@ -52,6 +56,19 @@ def _wait_custom_room_return(ctx: MonitorContext, started: float, timeout_sec: f
         time.sleep(2.0)
 
 
+def _read_custom_own_side(ctx: MonitorContext, frame) -> str | None:
+    """参加者の画面から、自分の陣営（ALPHA / BETA）を読む（読めなければ、少し待って読み直す）"""
+    for i in range(CUSTOM_SIDE_RETRIES + 1):
+        if frame is not None:
+            side = read_own_side(frame)
+            if side is not None:
+                return side
+        if i < CUSTOM_SIDE_RETRIES:
+            time.sleep(CUSTOM_SIDE_RETRY_SEC)
+            frame = capture_frame_with_fallback(ctx.trigger_exe)
+    return None
+
+
 def _wait_custom_role(ctx: MonitorContext, started: float) -> str | None:
     """対戦の画面が、参加者（"participant"）か観戦（"spectator"）かを待って決める。
 
@@ -73,10 +90,15 @@ def _wait_custom_role(ctx: MonitorContext, started: float) -> str | None:
                 camera_since = camera_since if camera_since is not None else now
                 camera_frames += 1
                 if now - camera_since >= CUSTOM_CAMERA_MIN_SEC and camera_frames >= CUSTOM_CAMERA_MIN_FRAMES:
+                    ctx.hooks.on_custom_role("spectator", None)
                     return "spectator"
             else:
                 camera_since, camera_frames = None, 0
                 if custom_match.has_ap_hud(frame):
+                    # 自分の陣営は、試合のクリップの表紙（相手の機体の紹介の場面）に使う（記録の中身には入れない）
+                    side = _read_custom_own_side(ctx, frame)
+                    log(f"[カスタム] 自分の陣営: {side or '不明'}")
+                    ctx.hooks.on_custom_role("participant", side)
                     return "participant"
         if now - last_mode_check >= 2.0:
             last_mode_check = now
