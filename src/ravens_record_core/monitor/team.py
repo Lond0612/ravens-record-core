@@ -15,7 +15,8 @@ import time
 from datetime import datetime
 
 from ravens_record_core import logger, matchlog
-from ravens_record_core.detectors import match_end, team_match
+from ravens_record_core.detectors import match_end, team_hud, team_match
+from ravens_record_core.detectors.team_timeline import TeamTimeline
 from ravens_record_core.detectors.loading_sequence_detector import capture_frame_with_fallback
 from ravens_record_core.detectors.mode_detector import detect_current_screen_mode
 from ravens_record_core.detectors.rate_detector import capture_stable_rate
@@ -75,10 +76,13 @@ def _record(ctx: MonitorContext) -> dict | None:
     logger.emit("team_match_detected", "[チーム戦] 対戦の開始を検出しました", msg_key="event.teamDetected")
     ctx.set_status("loading", "チーム戦の対戦を検出。ロード中です", "status.teamLoading")
 
+    # 自分のエンブレム（ロビーのネームプレート）: 試合中の自チームの欄と照らし合わせて、自分の番号を決める
+    lobby = _capture(ctx)
+    timeline = TeamTimeline(team_hud.lobby_emblem(lobby) if lobby is not None else None)
     rate_before, rate_note = _read_rate_before(ctx)
     ctx.set_status("in_match", "チーム戦の対戦中です", "status.teamInMatch")
 
-    ended = _watch_until_result(ctx, started)
+    ended = _watch_until_result(ctx, started, timeline)
     if ended is None:
         return None
     result, banner, hud_side = ended
@@ -90,6 +94,10 @@ def _record(ctx: MonitorContext) -> dict | None:
         rate_after = _read_rate_after(ctx, rate_before, rate_note)
 
     payload = team_match.build_payload(played_at, ended_at, result, banner, hud_side, rate_before, rate_after, _app_version(ctx))
+    # 試合の流れ（ポイントの推移・撃破・プライオリティ・自分の撃破）。最後の合計は、リザルト画面の値で補う
+    detail = timeline.finish(payload["own_side"], payload["own_points"], payload["opp_points"], payload["own_score"])
+    if detail is not None:
+        payload.update(detail)
     if payload["result"] is None:
         logger.emit("team_match_skipped", "[チーム戦] 試合の結果を読み取れなかったため、記録しませんでした",
                     level="warn", msg_key="event.teamSkipped")
@@ -126,7 +134,7 @@ def _read_rate_after(ctx: MonitorContext, rate_before: int | None, rate_note: st
     return None
 
 
-def _watch_until_result(ctx: MonitorContext, started: float):
+def _watch_until_result(ctx: MonitorContext, started: float, timeline: TeamTimeline | None = None):
     """リザルト画面を読み終えるまで待つ。(リザルト画面の読み取り | None, 帯の勝敗 | None, 試合中に読んだ自分の陣営 | None)。
     試合が終わらないまま AC6 が閉じた・ほかのモードへ移った・時間切れなら None"""
     banner: str | None = None
@@ -149,6 +157,8 @@ def _watch_until_result(ctx: MonitorContext, started: float):
         frame = _capture(ctx)
         if frame is not None:
             result = team_match.read_team_result(frame, with_map=False)
+            if result is None and timeline is not None:
+                timeline.observe(time.monotonic(), frame)
             if result is not None:
                 return _read_result_screen(ctx, frame), banner, hud_side
             if hud_side is None and now - last_side_read >= SIDE_READ_INTERVAL_SEC:
