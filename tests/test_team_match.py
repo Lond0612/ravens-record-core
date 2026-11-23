@@ -48,6 +48,37 @@ class TeamResultTest(unittest.TestCase):
         self.assertTrue(a.complete)
 
 
+class PointsCheckTest(unittest.TestCase):
+    """陣営の合計の読み落とし（実機: 「717PT」を 17 と読んだ）を、3 人の和と試合中の表示で直す"""
+
+    def result(self, beta_total):
+        return TeamResult(outcomes={"ALPHA": "win", "BETA": "lose"}, points={"ALPHA": 869, "BETA": beta_total}, own_side="ALPHA",
+                          own_points=225, rows={"ALPHA": [357, 287, 225], "BETA": [266, 231, 220]})
+
+    def test_verified(self):
+        r = self.result(717)
+        self.assertTrue(r.all_verified)
+        self.assertEqual(r.settle_points(869, 700), [])
+        self.assertEqual(r.points["BETA"], 717)
+
+    def test_dropped_digit_fixed_by_row_sum_and_hud(self):
+        r = self.result(17)
+        self.assertFalse(r.verified("BETA"))
+        self.assertEqual(len(r.settle_points(869, 717)), 1)
+        self.assertEqual(r.points["BETA"], 717)
+
+    def test_no_agreement_keeps_screen_value(self):
+        r = self.result(17)
+        r.rows["BETA"][2] = None
+        self.assertEqual(r.settle_points(869, 717), [])
+        self.assertEqual(r.points["BETA"], 17)
+
+    def test_merge_prefers_verified(self):
+        r = self.result(17)
+        r.merge(self.result(717))
+        self.assertEqual(r.points["BETA"], 717)
+
+
 class PayloadTest(unittest.TestCase):
     at = datetime(2026, 11, 22, 12, 9, 58, tzinfo=timezone.utc)
 

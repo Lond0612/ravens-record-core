@@ -140,6 +140,10 @@ class TeamTimeline:
 
     # ---- 試合の終わり -------------------------------------------------------
 
+    def hud_totals(self) -> dict:
+        """試合中の表示で最後に読めた合計 {"own", "opp", "score"}（リザルト画面の読み取りの確かめに使う）。読めていなければ {}"""
+        return {k: c.value for k, c in self.fields.items()} if self.started else {}
+
     def finish(self, own_side: Optional[str], final_own: Optional[int], final_opp: Optional[int],
                final_score: Optional[int]) -> Optional[dict]:
         """記録にする {"timeline": [...], "summary": {...}}。試合中の表示を一度も読めなければ None"""

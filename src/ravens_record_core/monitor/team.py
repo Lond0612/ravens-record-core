@@ -163,6 +163,10 @@ def _record(ctx: MonitorContext) -> dict | None:
     if (rate_before is not None or rate_note != "not_s_rank") and _wait_for_team_lobby(ctx):
         rate_after = _read_rate_after(ctx, rate_before, rate_note)
 
+    if result is not None:
+        hud = timeline.hud_totals()
+        for note in result.settle_points(hud.get("own"), hud.get("opp")):
+            log(f"[チーム戦] リザルト画面の合計を直しました: {note}")
     payload = team_match.build_payload(played_at, ended_at, result, banner, hud_side, rate_before, rate_after, _app_version(ctx))
     # 試合の流れ（ポイントの推移・撃破・プライオリティ・自分の撃破）。最後の合計は、リザルト画面の値で補う
     detail = timeline.finish(payload["own_side"], payload["own_points"], payload["opp_points"], payload["own_score"])
@@ -259,7 +263,7 @@ def _read_result_screen(ctx: MonitorContext, first_frame, debug: TeamDebug | Non
         debug.result(first_frame)
     merged = team_match.read_team_result(first_frame)
     end = time.monotonic() + RESULT_READ_SEC
-    while merged is not None and time.monotonic() < end and not (merged.complete and merged.own_points is not None and merged.map_match):
+    while merged is not None and time.monotonic() < end and not (merged.complete and merged.all_verified and merged.own_points is not None and merged.map_match):
         time.sleep(RESULT_POLL_SEC)
         frame = _capture(ctx)
         r = team_match.read_team_result(frame) if frame is not None else None
@@ -268,7 +272,7 @@ def _read_result_screen(ctx: MonitorContext, first_frame, debug: TeamDebug | Non
                 debug.result(frame)
             merged.merge(r)
     if merged is not None:
-        log(f"[チーム戦] リザルト画面を読みました: {merged.outcomes} {merged.points} 自分の陣営 {merged.own_side} "
+        log(f"[チーム戦] リザルト画面を読みました: {merged.outcomes} {merged.points} {merged.rows} 自分の陣営 {merged.own_side} "
             f"{merged.own_points}PT / マップ {merged.map_raw!r} → {merged.map_match}")
     return merged
 

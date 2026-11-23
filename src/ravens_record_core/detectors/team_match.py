@@ -49,6 +49,7 @@ class TeamResult:
     points: dict = field(default_factory=dict)        # {"ALPHA": int | None, "BETA": ...}（陣営の合計）
     own_side: Optional[str] = None                    # 白い枠の付いた行のある陣営
     own_points: Optional[int] = None                  # 自分のポイント
+    rows: dict = field(default_factory=dict)          # {"ALPHA": [int | None] * 3, ...}（3 人それぞれのポイント。合計の確かめに使う）
     map_raw: str = ""                                 # マップの名前（読んだ文字のまま）
     map_match: Optional[str] = None                   # 照合したマップの名前（日本語の表記）
     map_score: float = 0.0
@@ -59,6 +60,36 @@ class TeamResult:
         """記録に要るもの（自分の陣営・勝敗・両陣営のポイント）がそろったか"""
         return (self.own_side is not None and all(self.points.get(s) is not None for s in SIDES)
                 and self.result is not None)
+
+    def verified(self, side: str) -> bool:
+        """陣営の合計が、3 人のポイントの和と合っているか（文字の読み落とし「717PT」→ 17 などを見つける）"""
+        rows = self.rows.get(side) or []
+        total = self.points.get(side)
+        return total is not None and len(rows) == 3 and None not in rows and sum(rows) == total
+
+    @property
+    def all_verified(self) -> bool:
+        return all(self.verified(s) for s in SIDES)
+
+    def row_sum(self, side: str) -> Optional[int]:
+        rows = self.rows.get(side) or []
+        return sum(rows) if len(rows) == 3 and None not in rows else None
+
+    def settle_points(self, hud_own: Optional[int], hud_opp: Optional[int]) -> list[str]:
+        """合計が 3 人の和と合わない陣営は、「画面の合計」「3 人の和」「試合中の表示の最後の値」のうち 2 つが合う値にする。
+        直した陣営の説明を返す（ログ用）"""
+        notes = []
+        if self.own_side is None:
+            return notes
+        for side, hud in ((self.own_side, hud_own), (self.opp_side, hud_opp)):
+            if self.verified(side):
+                continue
+            seen = [v for v in (self.points.get(side), self.row_sum(side), hud if hud else None) if v is not None]
+            agreed = next((v for v in seen if seen.count(v) >= 2), None)
+            if agreed is not None and agreed != self.points.get(side):
+                notes.append(f"{side} {self.points.get(side)} → {agreed}（3 人の和 {self.row_sum(side)} / 試合中の表示 {hud}）")
+                self.points[side] = agreed
+        return notes
 
     @property
     def opp_side(self) -> Optional[str]:
@@ -82,8 +113,13 @@ class TeamResult:
         for side in SIDES:
             if self.outcomes.get(side) is None:
                 self.outcomes[side] = other.outcomes.get(side)
+            if not self.verified(side) and other.verified(side):
+                self.points[side], self.rows[side] = other.points[side], list(other.rows[side])
+                continue
             if self.points.get(side) is None:
                 self.points[side] = other.points.get(side)
+            mine, theirs = self.rows.get(side) or [None] * 3, other.rows.get(side) or [None] * 3
+            self.rows[side] = [a if a is not None else b for a, b in zip(mine, theirs)]
         if self.own_side is None and other.own_side is not None:
             self.own_side = other.own_side
         if self.own_points is None and other.own_side == self.own_side:
@@ -193,6 +229,8 @@ def read_team_result(frame: np.ndarray, with_map: bool = True) -> Optional[TeamR
         row = match_end._crop(frame, box)
         out.outcomes[side] = match_end._row_outcome(row)
         out.points[side] = _team_points(row)
+        x0, x1 = PLAYER_COLUMNS[side]
+        out.rows[side] = [_player_points(_box(frame, x0, y0, x1, y1)) for y0, y1 in PLAYER_ROWS]
     out.own_side, cell = _find_own_row(frame)
     if cell is not None:
         out.own_points = _player_points(cell)
