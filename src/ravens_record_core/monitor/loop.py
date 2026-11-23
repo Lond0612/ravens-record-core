@@ -46,6 +46,10 @@ NOT_READY_INTERVAL_SEC = 2.0
 HEARTBEAT_INTERVAL_SEC = 600.0
 
 
+# ロビーの見出しが読めない時間がこれだけ続いたら、ランクマッチのロビーを離れた（メニュー・ガレージなど）とみなす。
+# マッチング中・チャット中などに見出しが少し読めないことがあるため、長めにとる
+SCREEN_MODE_LOST_SEC = 30.0
+
 class Monitor:
     """監視ループの状態（進行中の試合・スコアの監視プロセス）と、1 周ごとの処理"""
 
@@ -61,6 +65,9 @@ class Monitor:
         self.ready_notified = False  # 初めて記録を進めてよくなったことを、差し込み口に 1 回だけ知らせる
         # 最後に記録した試合の対戦後レート（ロードを確かめられなかった試合で、対戦前レートが読めなかったときの代わりに使う）
         self.last_rate_after: int | None = None
+        # いまいる対戦の種類（on_screen_mode で知らせる）と、最後に見出しを読めた時刻
+        self.screen_mode: str | None = None
+        self.last_header_at = 0.0
 
     # ---- 全体 ---------------------------------------------------------------
 
@@ -132,9 +139,12 @@ class Monitor:
         custom_room = idle and (current_mode == "CUSTOM" or (current_mode is None and context == "CUSTOM"))
         team_lobby = idle and (current_mode == "TEAM" or (current_mode is None and context == "TEAM"))
 
+        self._update_screen_mode(now, current_mode, idle)
+
         if ranked_lobby:
             self._on_ranked_lobby(mode_result)
         elif team_lobby and ctx.config.record_team:
+            self._set_screen_mode("team")
             # チーム戦のロビー（v1.8〜）。ランクマッチ（SINGLE）の記録とは別の流れで記録する（monitor/team.py）
             run_team_lobby(ctx, self.screen)
             ctx.set_status("ac6_detected", "AC6を検出しました。ロビー画面を待機中です", "status.ac6Detected")
@@ -190,8 +200,34 @@ class Monitor:
 
     # ---- 待機中 --------------------------------------------------------------
 
+    def _set_screen_mode(self, mode: str | None) -> None:
+        if mode != self.screen_mode:
+            self.screen_mode = mode
+            try:
+                self.ctx.hooks.on_screen_mode(mode)
+            except Exception as e:  # 知らせる先の失敗で、監視を止めない
+                log(f"[モード判定] 対戦の種類を知らせられませんでした: {e!r}")
+
+    def _update_screen_mode(self, now: float, current_mode: str | None, idle: bool) -> None:
+        """いまいる対戦の種類を決める。ロビーの見出しが SINGLE / TEAM ならその種類、カスタムマッチならどちらでもない。
+        見出しが読めない時間が SCREEN_MODE_LOST_SEC 続いたら（メニュー・ガレージなどに移った）、どちらでもない。
+        試合の途中は変えない"""
+        if current_mode is not None:
+            self.last_header_at = now
+        if not idle:
+            return
+        if current_mode == "SINGLE":
+            self._set_screen_mode("single")
+        elif current_mode == "TEAM":
+            self._set_screen_mode("team" if self.ctx.config.record_team else None)
+        elif current_mode is not None:
+            self._set_screen_mode(None)
+        elif now - self.last_header_at >= SCREEN_MODE_LOST_SEC:
+            self._set_screen_mode(None)
+
     def _on_game_not_running(self, now: float) -> None:
         """AC6 プロセスが停止している場合はすべてをリセットして待機"""
+        self._set_screen_mode(None)
         self.ctx.hooks.on_rate_before(None)  # 次の試合の対戦前レートは分からない
         self.screen.set_active(False)
         self.screen.reset_context()
