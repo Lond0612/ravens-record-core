@@ -11,8 +11,13 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 import time
 from datetime import datetime
+from pathlib import Path
+
+import cv2
 
 from ravens_record_core import logger, matchlog
 from ravens_record_core.detectors import match_end, team_hud, team_match
@@ -43,6 +48,64 @@ RESULT_WAIT_AFTER_BANNER_SEC = 25.0
 LOBBY_RETURN_TIMEOUT_SEC = 60.0
 # 試合中、自分の陣営（上の左の見出しの色）を読む間隔
 SIDE_READ_INTERVAL_SEC = 5.0
+# 調査用の控え（データの保存先に team_debug.flag があるときだけ。端末の中だけに残し、送らない）
+DEBUG_FLAG = "team_debug.flag"
+DEBUG_KEEP = 10                 # 残す試合の数（古いものから消す）
+DEBUG_FRAME_EVERY_SEC = 10.0    # 試合中の画面を縮小して残す間隔
+DEBUG_FRAME_WIDTH = 960
+
+
+class TeamDebug:
+    """調査用の控え: 1 回ごとの読み取り（samples.jsonl）、ロビーの自分のエンブレム、リザルト画面、試合中の画面（縮小）、記録した中身"""
+
+    def __init__(self, ctx: MonitorContext) -> None:
+        root = Path(ctx.config.data_dir) / "team_debug"
+        self.dir = root / datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.samples: list = []
+        self.last_frame = 0.0
+        self.result_frames = 0
+        old = sorted(p for p in root.iterdir() if p.is_dir())
+        for p in old[:-DEBUG_KEEP]:
+            shutil.rmtree(p, ignore_errors=True)
+
+    @staticmethod
+    def enabled(ctx: MonitorContext) -> bool:
+        try:
+            return (Path(ctx.config.data_dir) / DEBUG_FLAG).exists()
+        except Exception:
+            return False
+
+    def image(self, name: str, img, width: int | None = None) -> None:
+        try:
+            if img is None or img.size == 0:
+                return
+            if width and img.shape[1] > width:
+                img = cv2.resize(img, (width, round(img.shape[0] * width / img.shape[1])), interpolation=cv2.INTER_AREA)
+            params = [cv2.IMWRITE_JPEG_QUALITY, 85] if name.endswith(".jpg") else []
+            cv2.imwrite(str(self.dir / name), img, params)
+        except Exception as e:
+            log(f"[チーム戦] [調査用] 画像を残せませんでした: {e!r}")
+
+    def frame(self, now: float, frame) -> None:
+        if now - self.last_frame >= DEBUG_FRAME_EVERY_SEC:
+            self.last_frame = now
+            self.image(f"frame_{len(list(self.dir.glob('frame_*.jpg'))):03d}.jpg", frame, DEBUG_FRAME_WIDTH)
+
+    def result(self, frame) -> None:
+        if self.result_frames < 6:
+            self.image(f"result_{self.result_frames}.jpg", frame)
+            self.result_frames += 1
+
+    def finish(self, payload: dict | None) -> None:
+        try:
+            with open(self.dir / "samples.jsonl", "w", encoding="utf-8") as f:
+                for s in self.samples:
+                    f.write(json.dumps(s, ensure_ascii=False) + "\n")
+            (self.dir / "payload.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+            log(f"[チーム戦] [調査用] 控えを残しました: {self.dir}")
+        except Exception as e:
+            log(f"[チーム戦] [調査用] 控えを残せませんでした: {e!r}")
 
 
 def run_team_lobby(ctx: MonitorContext, watcher) -> None:
@@ -78,12 +141,19 @@ def _record(ctx: MonitorContext) -> dict | None:
 
     # 自分のエンブレム（ロビーのネームプレート）: 試合中の自チームの欄と照らし合わせて、自分の番号を決める
     lobby = _capture(ctx)
-    timeline = TeamTimeline(team_hud.lobby_emblem(lobby) if lobby is not None else None)
+    debug = TeamDebug(ctx) if TeamDebug.enabled(ctx) else None
+    emblem = team_hud.lobby_emblem(lobby) if lobby is not None else None
+    timeline = TeamTimeline(emblem, debug.samples if debug else None)
+    if debug:
+        debug.image("lobby_emblem.png", emblem)
+        debug.image("lobby.jpg", lobby, DEBUG_FRAME_WIDTH)
     rate_before, rate_note = _read_rate_before(ctx)
     ctx.set_status("in_match", "チーム戦の対戦中です", "status.teamInMatch")
 
-    ended = _watch_until_result(ctx, started, timeline)
+    ended = _watch_until_result(ctx, started, timeline, debug)
     if ended is None:
+        if debug:
+            debug.finish(None)
         return None
     result, banner, hud_side = ended
     ended_at = datetime.now().astimezone()
@@ -98,6 +168,8 @@ def _record(ctx: MonitorContext) -> dict | None:
     detail = timeline.finish(payload["own_side"], payload["own_points"], payload["opp_points"], payload["own_score"])
     if detail is not None:
         payload.update(detail)
+    if debug:
+        debug.finish(payload)
     if payload["result"] is None:
         logger.emit("team_match_skipped", "[チーム戦] 試合の結果を読み取れなかったため、記録しませんでした",
                     level="warn", msg_key="event.teamSkipped")
@@ -134,7 +206,7 @@ def _read_rate_after(ctx: MonitorContext, rate_before: int | None, rate_note: st
     return None
 
 
-def _watch_until_result(ctx: MonitorContext, started: float, timeline: TeamTimeline | None = None):
+def _watch_until_result(ctx: MonitorContext, started: float, timeline: TeamTimeline | None = None, debug: TeamDebug | None = None):
     """リザルト画面を読み終えるまで待つ。(リザルト画面の読み取り | None, 帯の勝敗 | None, 試合中に読んだ自分の陣営 | None)。
     試合が終わらないまま AC6 が閉じた・ほかのモードへ移った・時間切れなら None"""
     banner: str | None = None
@@ -159,8 +231,10 @@ def _watch_until_result(ctx: MonitorContext, started: float, timeline: TeamTimel
             result = team_match.read_team_result(frame, with_map=False)
             if result is None and timeline is not None:
                 timeline.observe(time.monotonic(), frame)
+            if debug and result is None:
+                debug.frame(now, frame)
             if result is not None:
-                return _read_result_screen(ctx, frame), banner, hud_side
+                return _read_result_screen(ctx, frame, debug), banner, hud_side
             if hud_side is None and now - last_side_read >= SIDE_READ_INTERVAL_SEC:
                 last_side_read = now
                 hud_side = match_end.read_own_side(frame)
@@ -179,8 +253,10 @@ def _watch_until_result(ctx: MonitorContext, started: float, timeline: TeamTimel
         time.sleep(RESULT_POLL_SEC if banner is not None else BANNER_POLL_SEC if elapsed >= BANNER_SEARCH_AFTER_SEC else POLL_SEC)
 
 
-def _read_result_screen(ctx: MonitorContext, first_frame) -> team_match.TeamResult | None:
+def _read_result_screen(ctx: MonitorContext, first_frame, debug: TeamDebug | None = None) -> team_match.TeamResult | None:
     """リザルト画面を、見えている間（2 秒ほど）何枚か読んで、読めたところを合わせる"""
+    if debug:
+        debug.result(first_frame)
     merged = team_match.read_team_result(first_frame)
     end = time.monotonic() + RESULT_READ_SEC
     while merged is not None and time.monotonic() < end and not (merged.complete and merged.own_points is not None and merged.map_match):
@@ -188,6 +264,8 @@ def _read_result_screen(ctx: MonitorContext, first_frame) -> team_match.TeamResu
         frame = _capture(ctx)
         r = team_match.read_team_result(frame) if frame is not None else None
         if r is not None:
+            if debug:
+                debug.result(frame)
             merged.merge(r)
     if merged is not None:
         log(f"[チーム戦] リザルト画面を読みました: {merged.outcomes} {merged.points} 自分の陣営 {merged.own_side} "

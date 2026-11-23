@@ -61,8 +61,9 @@ class _Confirmed:
 
 
 class TeamTimeline:
-    def __init__(self, emblem: Optional[np.ndarray] = None) -> None:
+    def __init__(self, emblem: Optional[np.ndarray] = None, debug: Optional[list] = None) -> None:
         self.emblem = emblem
+        self.debug = debug   # 渡すと、1 回ごとの読み取りを足す（調査用。monitor/team.py の TeamDebug）
         self.started = False
         self.offset: Optional[float] = None      # 実際の時刻 − 試合の秒（残り時間から）
         self.last_t = 0.0
@@ -96,23 +97,31 @@ class TeamTimeline:
 
         if self.hud_side is None:
             self.hud_side = match_end.read_own_side(frame)
+        emblem_scores = None
         if self.emblem is not None and self.emblem_slot is None and self.emblem_tries < 20:
             self.emblem_tries += 1
-            slot, candidates = team_hud.own_slot_from_emblem(team_hud.emblem_scores(f, self.emblem))
+            emblem_scores = team_hud.emblem_scores(f, self.emblem)
+            slot, candidates = team_hud.own_slot_from_emblem(emblem_scores)
             if slot is not None:
                 self.emblem_slot = slot
             elif candidates:
                 self.emblem_candidates = sorted(set(self.emblem_candidates) | set(candidates))
 
+        reads = {}
         for field, conf in self.fields.items():
-            got = conf.feed(team_hud.read_field(f, field), t)
+            reads[field] = team_hud.read_field(f, field)
+            got = conf.feed(reads[field], t)
             if got is not None:
                 self.changes.append((got[0], field, got[1], got[2]))
 
-        for kind, side, slot in self._new_rows(t, team_hud.read_feed(f)):
+        feed = team_hud.read_feed(f)
+        for kind, side, slot in self._new_rows(t, feed):
             self.events.append(["q" if kind == "priority" else "d", t, SIDE_CODE[side], slot])
 
         rebooting = team_hud.is_rebooting(f)
+        if self.debug is not None:
+            self.debug.append({"wall": round(wall, 2), "t": t, "timer": remaining, **reads, "feed": feed, "reboot": rebooting,
+                               "emblem": [round(s, 3) for s in emblem_scores] if emblem_scores else None, "side": self.hud_side})
         if rebooting != self.rebooting:
             self.events.append(["r" if rebooting else "u", t])
             self.rebooting = rebooting
