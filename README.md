@@ -6,7 +6,7 @@
 
 ## 日本語
 
-**ARMORED CORE VI FIRES OF RUBICON** のランクマッチ・カスタムマッチを、ゲームの画面から自動で判定して記録する Python ライブラリです（非公式）。
+**ARMORED CORE VI FIRES OF RUBICON** のランクマッチ（シングル・チーム戦）・カスタムマッチを、ゲームの画面から自動で判定して記録する Python ライブラリです（非公式）。
 戦績記録アプリ [RAVEN'S RECORD](https://ravens-record.com) の判定部分を切り出したもので、RAVEN'S RECORD 自身もこのライブラリを使っています。
 
 ゲームのメモリやファイルには触れません。ゲームのウィンドウを撮影し、画面に出ている文字や表示を読むだけです。
@@ -18,6 +18,12 @@
   - ロード画面の終わりを確かめ、試合前の映像からマップを判定する
   - 試合中のスコアのマス・勝敗の帯・リザルト画面から、最終スコアと勝敗を決める
   - 対戦前・対戦後のレート（S ランクの順位）を読む
+- **ランクマッチ（チーム戦、3 対 3）**
+  - リザルト画面から、勝敗・両チームのポイント・自分の陣営とポイント・マップを読む（チームの中の順位は記録しない）
+  - 試合中の表示から、試合の流れ（ポイントの推移・撃破・被撃破・プライオリティ・ターゲット）と集計（チームの撃破・被撃破、自分が撃破された数、自分の番号）をまとめる
+  - S ランクなら、対戦前・対戦後のレートを読む
+  - プレイヤー名・試合の ID は読みません
+- **画面の種類**: いまシングル / チーム戦のどちらの画面にいるかを、フック `on_screen_mode` で知らせる
 - **カスタムマッチ（シングル）**
   - ルーム画面の設定（対戦形式・制限時間・メンバー交代方式・マップ）を読む
   - 自分が出た対戦はスコアを、観戦した対戦は ALPHA / BETA のラウンド数を記録する
@@ -26,7 +32,7 @@
   - 判定の経過を JSON Lines（1 行 1 件の JSON）で出す
   - 試合が終わるたびに、結果を 1 つの JSON ファイルに保存する
 
-チーム戦は記録しません。
+チームのカスタムマッチは記録しません。
 
 ### 必要なもの
 
@@ -54,6 +60,7 @@ uv run python -m ravens_record_core --log-file events.jsonl
 | `--json` | 標準出力のログを JSON Lines にする |
 | `--tesseract-dir DIR` | `tesseract.exe` のあるフォルダ（指定しなければ PATH などから探す） |
 | `--no-custom` | カスタムマッチを記録しない |
+| `--no-team` | チーム戦を記録しない |
 | `--trigger-exe NAME` | 監視するゲームの実行ファイル名（テスト用） |
 
 ### 使い方（Python）
@@ -99,6 +106,7 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
 | `YYYY-MM-DD_HH-MM-SS_自分-相手_session.json` | ランクマッチ。マップ・スコア・勝敗・対戦前後のレートと順位・終わった日時・スコアの根拠など |
 | `YYYY-MM-DD_HH-MM-SS_custom_自分-相手.json` | 自分が出たカスタムマッチ。読んだ設定・マップの照合結果・ラウンド数 |
 | `YYYY-MM-DD_HH-MM-SS_custom_spectated_A-B.json` | 観戦したカスタムマッチ。ALPHA / BETA のラウンド数 |
+| `YYYY-MM-DD_HH-MM-SS_team_自分-相手.json` | チーム戦。勝敗・両チームのポイント・自分の陣営とポイント・マップ・試合の流れ（`timeline`）と集計（`summary`） |
 
 読めなかったスコアは `X` です。項目の説明は [`match_session.py`](src/ravens_record_core/match_session.py) と [`matchlog.py`](src/ravens_record_core/matchlog.py) にあります。
 
@@ -111,6 +119,7 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
 | ロード画面の終わり（別プロセス） | `detectors/loading_sequence_detector.py`・`detectors/loading_screen_watcher.py` |
 | マップの判定（色のヒストグラムの照合） | `detectors/map_detector.py`・`data/labels_pool.json` |
 | スコア・勝敗（別プロセス） | `detectors/score_detector.py`・`detectors/match_end.py` |
+| チーム戦（リザルト・試合中の表示・試合の流れ） | `monitor/team.py`・`detectors/team_match.py`・`detectors/team_hud.py`・`detectors/team_timeline.py` |
 | レート | `detectors/rate_detector.py`・`ocr/rate_digits.py` |
 | 全体の流れ | `monitor/loop.py` |
 
@@ -123,6 +132,8 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
 自分の環境で作る場合は、自分で撮った画面・録画から見本を切り出し（`scripts/harvest_ocr_samples.py`）、`scripts/make_shape_templates.py`・`scripts/make_rate_digit_templates.py` を実行してください。作ったテンプレートは `.gitignore` 済みで、コミットされません。ゲームの画面から作ったものなので、配布・公開はしないでください。
 
 同梱のマップの見本は 5 マップで計 32 件と少なめで、画面の設定や解像度によっては判定が外れやすくなります。外れる環境では、`<保存先>/map_templates_cache.json` に見本を足せます（形は `{"feature_version": ..., "shared": {マップ名: [特徴量, ...]}, "own": {...}}`。`shared` があれば同梱の見本の代わりに使い、`own` は足します。詳しくは `detectors/map_detector.py` の `template_cache_path()`）。
+
+チーム戦の試合中の表示のテンプレート（`ocr/team_hud_templates.py`）も同梱していません。無いときは、チーム戦はリザルト画面だけから記録します（試合の流れは記録しません）。自分のチーム戦の録画から `scripts/make_team_hud_templates.py` で作れます。
 
 ### テスト
 
@@ -150,11 +161,13 @@ It never touches the game's memory or files. It only captures the game window an
 
 ### Features
 
+- **Ranked matches (team, 3v3)**: reads the result, both teams' points, your side and points, and the map from the result screen (your place in the team is not recorded). From the in-match HUD it builds the match flow (points over time, kills, deaths, priority target) and a summary (team kills and deaths, your deaths, your slot). Reads the rating in S rank. It never reads player names or the match ID.
+- **Screen mode**: tells you whether you are on the single or team screens through the `on_screen_mode` hook.
 - **Ranked matches (single)**: detects the match start in the lobby. It then confirms the end of the loading screen, identifies the map from the pre-match intro, and decides the final score and result. It also reads the rating (and S-rank place) before and after the match.
 - **Custom matches (single)**: reads the room settings (format, time limit, swap mode, map). It records your own matches (score) and spectated matches (ALPHA / BETA rounds). It never reads player names.
 - **Logs**: writes progress events as JSON Lines, and saves one JSON file per finished match.
 
-Team matches are not recorded.
+Team custom matches are not recorded.
 
 ### Requirements
 
@@ -172,7 +185,7 @@ uv sync
 uv run python -m ravens_record_core --log-file events.jsonl
 ```
 
-It waits for the game to start, then records every match it finds. Press Ctrl+C to stop. Run with `--help` for all options: data directory, Tesseract folder, JSON output, and disabling custom matches.
+It waits for the game to start, then records every match it finds. Press Ctrl+C to stop. Run with `--help` for all options: data directory, Tesseract folder, JSON output, and disabling custom or team matches (`--no-custom`, `--no-team`).
 
 ### Python API
 
@@ -200,6 +213,7 @@ Recorder(Config(data_dir=Path("my-logs")), MyHooks()).run()
   - `*_session.json`: a ranked match
   - `*_custom_*.json`: a custom match you played
   - `*_custom_spectated_*.json`: a spectated custom match
+  - `*_team_*.json`: a team match (with the match flow `timeline` and `summary`)
 
   Field descriptions are in [`match_session.py`](src/ravens_record_core/match_session.py) and [`matchlog.py`](src/ravens_record_core/matchlog.py).
 
@@ -214,5 +228,5 @@ The bundled map samples are few (32 across the 5 maps), so detection may miss mo
 - The code is released under the [MIT License](LICENSE).
 - This is an unofficial tool. It is not affiliated with FromSoftware, Inc. or Bandai Namco Entertainment Inc. ARMORED CORE is a trademark or registered trademark of its respective owners.
 - The bundled map features are numeric colour-distribution data derived from the game screen; no screenshots are included.
-- **Glyph templates are not included.** The glyph templates (`ocr/shape_templates.py`, `ocr/rate_digit_templates.py`) are made from text rendered on the game screen, so they are not part of this repository. Without them, headings, status, results and rates are read with Tesseract only (more misreads and misses than with templates). To make your own, cut samples from your own screenshots or recordings (`scripts/harvest_ocr_samples.py`) and run `scripts/make_shape_templates.py` and `scripts/make_rate_digit_templates.py`. The generated files are git-ignored; since they are derived from the game screen, please do not distribute them.
+- **Glyph templates are not included.** The glyph templates (`ocr/shape_templates.py`, `ocr/rate_digit_templates.py`, `ocr/team_hud_templates.py`) are made from text rendered on the game screen, so they are not part of this repository. Without the team HUD templates, team matches are recorded from the result screen only (no match flow); make them from your own team-match recordings with `scripts/make_team_hud_templates.py`. Without them, headings, status, results and rates are read with Tesseract only (more misreads and misses than with templates). To make your own, cut samples from your own screenshots or recordings (`scripts/harvest_ocr_samples.py`) and run `scripts/make_shape_templates.py` and `scripts/make_rate_digit_templates.py`. The generated files are git-ignored; since they are derived from the game screen, please do not distribute them.
 - Tesseract OCR is separate software (Apache License 2.0).
