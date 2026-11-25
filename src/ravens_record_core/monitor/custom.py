@@ -15,6 +15,7 @@ from ravens_record_core.detectors.mode_detector import detect_current_screen_mod
 from ravens_record_core.detectors.screen_state_watcher import ScreenStateWatcher
 from ravens_record_core.hooks import CUSTOM_PARTICIPANT, CUSTOM_SPECTATED
 from ravens_record_core.monitor.base import WATCH_POLL_INTERVAL_SEC, MonitorContext, is_process_running, log
+from ravens_record_core.monitor.custom_team import run_custom_team_match
 from ravens_record_core.monitor.children import run_score_detector, start_loading_watcher, stop_loading_watcher, stop_process
 from ravens_record_core.monitor.screen import screen_watcher
 
@@ -279,9 +280,11 @@ def run_custom_match_room(ctx: MonitorContext, watcher: ScreenStateWatcher | Non
             settings = fresh if (fresh is not None and fresh.format_match) else last_settings
             watcher.set_active(False)  # 対戦の間は、下の処理が画面を見る
             try:
-                if settings is None or not settings.is_single():
-                    reason = "チーム形式の" if (settings is not None and settings.is_team()) else "対戦形式を読み取れない"
-                    log(f"[カスタム] 対戦の開始を検出しましたが、{reason}ため記録しません。")
+                if settings is not None and settings.is_team():
+                    # チームの対戦（v2.2〜）: チームのランクマッチと同じ試合中の画面を読む（monitor/custom_team.py）
+                    run_custom_team_match(ctx, settings)
+                elif settings is None or not settings.is_single():
+                    log("[カスタム] 対戦の開始を検出しましたが、対戦形式を読み取れないため記録しません。")
                     _wait_custom_room_return(ctx, time.monotonic(), CUSTOM_MATCH_MAX_SEC)
                 else:
                     run_custom_match(ctx, settings)

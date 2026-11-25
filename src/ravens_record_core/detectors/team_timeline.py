@@ -61,12 +61,14 @@ class _Confirmed:
 
 
 class TeamTimeline:
-    def __init__(self, emblem: Optional[np.ndarray] = None, debug: Optional[list] = None) -> None:
+    def __init__(self, emblem: Optional[np.ndarray] = None, debug: Optional[list] = None, match_sec: int = MATCH_SEC) -> None:
         self.emblem = emblem
+        self.match_sec = match_sec   # 試合の長さ（ランクマッチは 3 分。チームのカスタムマッチは、ルームの制限時間）
         self.debug = debug   # 渡すと、1 回ごとの読み取りを足す（調査用。monitor/team.py の TeamDebug）
         self.started = False
         self.offset: Optional[float] = None      # 実際の時刻 − 試合の秒（残り時間から）
         self.last_t = 0.0
+        self.timer_visible = False
         self.fields = {k: _Confirmed() for k in ("own", "opp", "score")}
         self.changes: list[tuple[float, str, int, int]] = []
         self.events: list[list] = []
@@ -84,15 +86,16 @@ class TeamTimeline:
             return
         f = team_hud.to_1080(frame)
         remaining = team_hud.read_timer(f)
+        self.timer_visible = remaining is not None   # この回に残り時間が読めたか（チームのカスタムマッチで、試合の終わりを探す手がかり）
         if remaining is not None:
-            t = float(MATCH_SEC - remaining)
+            t = float(self.match_sec - remaining)
             est = wall - t
             # 残り時間は 1 秒刻みなので、実際の時刻との差は、いちばん大きいもの（秒の変わり目に近いもの）を使う
             self.offset = est if self.offset is None else max(self.offset, est) if abs(est - self.offset) < 3 else est
             self.started = True
         elif not self.started or self.offset is None:
             return
-        t = round(min(max(wall - self.offset, 0.0), MATCH_SEC + 5), 1)
+        t = round(min(max(wall - self.offset, 0.0), self.match_sec + 5), 1)
         self.last_t = t
 
         if self.hud_side is None:
@@ -151,7 +154,7 @@ class TeamTimeline:
             return None
         own_side = own_side or self.hud_side
         # 最後の合計をリザルト画面の値で補う（最後の撃破が、読む前に試合が終わったときなど）
-        end_t = float(MATCH_SEC)
+        end_t = float(self.match_sec)
         for field, final in (("own", final_own), ("opp", final_opp), ("score", final_score)):
             conf = self.fields[field]
             if final is not None and final > conf.value:
@@ -214,7 +217,7 @@ class TeamTimeline:
             holder[side] = (s, t)
         for side, (s, since) in holder.items():
             priority.setdefault(side, {}).setdefault(str(s), 0.0)
-            priority[side][str(s)] += max(0.0, MATCH_SEC - since)
+            priority[side][str(s)] += max(0.0, self.match_sec - since)
         priority = {side: {k: round(v) for k, v in m.items()} for side, m in priority.items()}
         return {
             "team_kills": sum(1 for e in downs if own_code and e[2] != own_code) if own_code else None,
