@@ -49,6 +49,7 @@ VERDICT_NORMAL = "normal"                      # ふつうに終わった（読�
 # on_custom_match の kind
 CUSTOM_PARTICIPANT = "participant"             # 自分が出た対戦
 CUSTOM_SPECTATED = "spectated"                 # 観戦した対戦
+CUSTOM_TEAM_SPECTATED = "team_spectated"       # 観戦したチームの対戦（v2.2〜。payload は team_match.build_spectated_payload）
 
 
 class Hooks:

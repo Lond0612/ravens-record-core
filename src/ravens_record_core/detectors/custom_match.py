@@ -51,6 +51,9 @@ CAMERA_ROIS = (
     (0.0443, 0.537, 0.0286, 0.037),  # 左（ALPHA）の欄
     (0.9297, 0.319, 0.0260, 0.037),  # 右（BETA）の欄
 )
+# チーム戦（3 対 3）の観戦: カメラが 2・3 番の人を追っていると、マークはその欄に出る。欄の間隔（画面の高さに対する割合）は、
+# 左（ALPHA）78px・右（BETA）70px（1080p。team_hud の欄と同じ）。運営者のチームの観戦の録画（2026-11-25）で確認
+TEAM_CAMERA_SLOT_PITCH = (78 / 1080, 70 / 1080)
 # マークとの近さ（正規化相互相関）。録画では、対戦中は 0.97 前後、ルーム・ローディング・紹介の映像では最大 0.65
 CAMERA_MATCH_MIN = 0.85
 
@@ -351,13 +354,20 @@ def _camera_template() -> np.ndarray:
 _CAMERA_TEMPLATE = _camera_template()
 
 
-def camera_icon_score(frame: np.ndarray) -> float:
-    """観戦のカメラのマークとの近さ（0〜1。左右の欄のうち高いほう）。読むのは、マークの出る小さな範囲だけ。"""
+def _camera_rois(team: bool) -> list:
+    if not team:
+        return list(CAMERA_ROIS)
+    return [(x, y + pitch * i, w, hh) for (x, y, w, hh), pitch in zip(CAMERA_ROIS, TEAM_CAMERA_SLOT_PITCH) for i in range(3)]
+
+
+def camera_icon_score(frame: np.ndarray, team: bool = False) -> float:
+    """観戦のカメラのマークとの近さ（0〜1。欄のうち高いほう）。読むのは、マークの出る小さな範囲だけ。
+    team: チーム戦（3 対 3）の観戦。左右 3 つずつの欄を見る"""
     if frame is None or frame.size == 0:
         return 0.0
     h = frame.shape[0]
     best = 0.0
-    for roi in CAMERA_ROIS:
+    for roi in _camera_rois(team):
         img = _crop(frame, roi)
         if img.size == 0:
             continue
@@ -370,9 +380,9 @@ def camera_icon_score(frame: np.ndarray) -> float:
     return best
 
 
-def has_spectator_camera(frame: np.ndarray) -> bool:
-    """観戦の画面か（カメラのマークがあるか）。参加者の画面には無い。"""
-    return camera_icon_score(frame) >= CAMERA_MATCH_MIN
+def has_spectator_camera(frame: np.ndarray, team: bool = False) -> bool:
+    """観戦の画面か（カメラのマークがあるか）。参加者の画面には無い。team: チーム戦（3 対 3）の欄も見る"""
+    return camera_icon_score(frame, team) >= CAMERA_MATCH_MIN
 
 
 # 観戦で記録する、試合の終わりのスコア（ALPHA, BETA）。ScoreDetector の試合の終了と同じ組み合わせ

@@ -246,6 +246,39 @@ def read_team_result(frame: np.ndarray, with_map: bool = True) -> Optional[TeamR
 SCHEMA_VERSION = 1
 
 
+def build_spectated_payload(started_at, ended_at, alpha: int, beta: int, result: Optional[TeamResult], app_version: str) -> dict:
+    """観戦したチームの対戦 1 回の記録（v2.2〜）。観戦の画面は左が ALPHA・右が BETA なので、ALPHA・BETA のポイントで持つ。
+    プレイヤー名・試合の ID は入れない（サーバーの add_team_spectated_match）"""
+    import uuid
+    r = result or TeamResult()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "client_match_id": str(uuid.uuid4()),
+        "app_version": app_version,
+        "started_at": started_at.astimezone().isoformat(timespec="seconds"),
+        "ended_at": ended_at.astimezone().isoformat(timespec="seconds"),
+        "alpha_points": alpha,
+        "beta_points": beta,
+        "map_raw": r.map_raw or None,
+        "map_hint": {"match": r.map_match, "score": r.map_score, "lang": r.map_lang} if r.map_match else None,
+    }
+
+
+def spectated_timeline(detail: dict) -> dict:
+    """観戦の試合の流れ（TeamTimeline.finish を、自チーム = ALPHA として読んだもの）から、観戦では意味の無いものを除く:
+    自分の SCORE の増え（左下の SCORE は、カメラが追っている人の点数）・自分の REBOOTING・自分の番号と撃破の数"""
+    timeline = []
+    for e in detail.get("timeline") or []:
+        if e[0] in ("r", "u"):
+            continue
+        if e[0] == "p":
+            e = [*e[:5], None, *e[6:]]
+        timeline.append(e)
+    summary = detail.get("summary") or {}
+    kept = {k: summary[k] for k in ("priority_sec", "targets") if k in summary}
+    return {"timeline": timeline, "summary": kept}
+
+
 def build_payload(played_at, ended_at, result: Optional[TeamResult], banner_outcome: Optional[str], hud_side: Optional[str],
                   rate_before: Optional[int], rate_after: Optional[int], app_version: str) -> dict:
     """チーム戦の試合 1 回の記録。リザルト画面を読めなかったときは、試合の終わりの帯（YOU WIN / YOU LOSE）の勝敗と、
