@@ -135,6 +135,10 @@ class Hooks:
         """チーム戦の試合を保存したとき（payload は team_match.build_payload）。False を返すと「記録しました」のイベントを出さない"""
         return True
 
+    def on_team_match_clock(self, start_epoch: float) -> None:
+        """チーム戦の試合の時刻の基準が分かったとき（試合を記録する直前に 1 回）。start_epoch: 試合の流れの 0 秒目
+        （残り時間が試合の長さを指していた時刻。time.time() の値）。試合のクリップの再生位置と、試合の流れを合わせるのに使う"""
+
     def on_team_match_ended(self, payload: dict | None) -> None:
         """チーム戦の試合の監視を終えたとき（必ず呼ぶ）。記録した試合なら payload、記録しなかったなら None"""
 

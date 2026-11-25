@@ -105,6 +105,9 @@ def _record(ctx: MonitorContext, settings) -> dict | None:
     detail = timeline.finish(payload["own_side"], payload["own_points"], payload["opp_points"], payload["own_score"])
     if detail is not None:
         payload.update(detail)
+    # 試合の流れの 0 秒目の時刻（試合のクリップの再生位置と合わせる。記録には入れない）
+    if (start_epoch := timeline.start_epoch()) is not None:
+        ctx.hooks.on_team_match_clock(start_epoch)
     path = matchlog.write_team_match(ctx.config.logs_dir, payload, ended_at)
     if ctx.hooks.on_team_match(payload, path):
         own, opp = payload.get("own_points"), payload.get("opp_points")

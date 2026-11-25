@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import time
 from collections import Counter, deque
 from typing import Optional
 
@@ -140,6 +141,13 @@ class TeamTimeline:
             new += [row] * max(0, n - seen)
         self.feed_seen.append((t, now))
         return new
+
+    def start_epoch(self) -> Optional[float]:
+        """試合の流れの 0 秒目の時刻（time.time() の値）。observe に渡した時刻は time.monotonic() なので、いまの差で直す。
+        残り時間を一度も読めていなければ None"""
+        if self.offset is None:
+            return None
+        return time.time() - (time.monotonic() - self.offset)
 
     # ---- 試合の終わり -------------------------------------------------------
 

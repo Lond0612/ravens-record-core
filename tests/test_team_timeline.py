@@ -116,5 +116,14 @@ class TimelineTest(unittest.TestCase):
         self.assertIsNone(run([{"timer": None}] * 3))
 
 
+class StartEpochTest(unittest.TestCase):
+    def test_start_epoch_converts_monotonic_offset_to_wall_clock(self):
+        tl = TeamTimeline()
+        self.assertIsNone(tl.start_epoch())
+        tl.offset = 500.0  # observe の時刻（monotonic）で、0 秒目が 500
+        with mock.patch.object(team_timeline.time, "monotonic", return_value=530.0),                 mock.patch.object(team_timeline.time, "time", return_value=1_700_000_030.0):
+            self.assertAlmostEqual(tl.start_epoch(), 1_700_000_000.0)
+
+
 if __name__ == "__main__":
     unittest.main()
