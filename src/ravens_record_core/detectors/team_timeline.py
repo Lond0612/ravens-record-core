@@ -21,6 +21,9 @@
   own_deaths: 自分の撃破された数（自分の番号の「撃破」と、それに当たらない REBOOTING。試合の終わりぎわの撃破は REBOOTING が出ない）
   own_slot / own_slot_basis: 自分の番号と、その決め方（emblem: エンブレム / death: 自分が撃破された時刻の「撃破」の番号）
   priority_sec: {"a": {"1": 秒, ...}, "b": {...}} 陣営・番号ごとに、プライオリティだった秒数
+  targets: {"own": [1番, 2番, 3番], "opp": [...]} 被ターゲット数（その機体をロックしていた敵の数）の、試合の秒ごとの並び。
+      1 秒 1 文字の "0"〜"3"（読めなかった秒は "."）。own = 自チーム（画面の左の欄）・opp = 相手（右の欄）。
+      読み取りは約 1 秒ごとなので、読めなかった秒は、TARGET_FILL_SEC 秒以内の直前の値で埋める
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ MAX_STEP = 400          # 1 回の読み取りで増えうるポイントの上�
 MERGE_SEC = 2.5         # この秒数以内のポイントの変化は、1 つの出来事にまとめる
 DEATH_MATCH_SEC = 6.0   # 自分の REBOOTING と、自チームの「撃破」を同じ出来事とみなす時刻の差（REBOOTING は撃破の 4 秒ほどあとに出る）
 FEED_MEMORY_SEC = 5.0   # 流れる表示の行を、同じ行とみなす時間
+TARGET_FILL_SEC = 2     # 被ターゲット数: 読めなかった秒を、直前の値で埋める上限
 SIDE_CODE = {"ALPHA": "a", "BETA": "b"}
 
 
@@ -74,6 +78,7 @@ class TeamTimeline:
         self.changes: list[tuple[float, str, int, int]] = []
         self.events: list[list] = []
         self.feed_seen: deque = deque()   # (時刻, その回に見えた行の数え)
+        self.target_reads: dict[int, dict] = {}   # 試合の秒 → その秒に最後に読めた被ターゲット数
         self.rebooting = False
         self.hud_side: Optional[str] = None
         self.emblem_slot: Optional[int] = None
@@ -122,9 +127,14 @@ class TeamTimeline:
         for kind, side, slot in self._new_rows(t, feed):
             self.events.append(["q" if kind == "priority" else "d", t, SIDE_CODE[side], slot])
 
+        targets = team_hud.read_targets(f)
+        if targets is not None and 0 <= t < self.match_sec:
+            self.target_reads[int(t)] = targets
+
         rebooting = team_hud.is_rebooting(f)
         if self.debug is not None:
             self.debug.append({"wall": round(wall, 2), "t": t, "timer": remaining, **reads, "feed": feed, "reboot": rebooting,
+                               "targets": targets,
                                "emblem": [round(s, 3) for s in emblem_scores] if emblem_scores else None, "side": self.hud_side})
         if rebooting != self.rebooting:
             self.events.append(["r" if rebooting else "u", t])
@@ -170,7 +180,28 @@ class TeamTimeline:
                 conf.value = final
         timeline = self._point_events() + self.events
         timeline.sort(key=lambda e: (e[1], "pdqru".index(e[0])))
-        return {"timeline": timeline, "summary": self._summary(timeline, own_side)}
+        summary = self._summary(timeline, own_side)
+        targets = self._target_series()
+        if targets is not None:
+            summary["targets"] = targets
+        return {"timeline": timeline, "summary": summary}
+
+    def _target_series(self) -> Optional[dict]:
+        """被ターゲット数の、試合の秒ごとの並び（summary の targets）。一度も読めていなければ None"""
+        if not self.target_reads:
+            return None
+        out = {side: [[] for _ in range(3)] for side in ("own", "opp")}
+        last, last_sec = None, None
+        for sec in range(self.match_sec):
+            read = self.target_reads.get(sec)
+            if read is not None:
+                last, last_sec = read, sec
+            elif last is None or sec - last_sec > TARGET_FILL_SEC:
+                last = None
+            for side in out:
+                for i in range(3):
+                    out[side][i].append(str(last[side][i]) if last is not None else ".")
+        return {side: ["".join(chars) for chars in slots] for side, slots in out.items()}
 
     def _point_events(self) -> list[list]:
         """ポイントの変化を、近い時刻どうしまとめて ["p", t, 自チーム, 相手, 自チームの増え, 自分の増え, 相手の増え]"""

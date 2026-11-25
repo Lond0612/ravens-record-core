@@ -33,6 +33,7 @@ def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None)):
         mock.patch.object(hud, "read_field", side_effect=lambda f, k: cur.get(k)),
         mock.patch.object(hud, "read_feed", side_effect=lambda f: cur.get("feed", [])),
         mock.patch.object(hud, "is_rebooting", side_effect=lambda f: cur.get("reboot", False)),
+        mock.patch.object(hud, "read_targets", side_effect=lambda f: cur.get("targets")),
         mock.patch.object(hud, "emblem_scores", return_value=emblem_scores or [0.0, 0.0, 0.0]),
         mock.patch.object(team_timeline.match_end, "read_own_side", return_value=own_side),
     ]
@@ -114,6 +115,41 @@ class TimelineTest(unittest.TestCase):
 
     def test_nothing_before_hud(self):
         self.assertIsNone(run([{"timer": None}] * 3))
+
+
+class TargetSeriesTest(unittest.TestCase):
+    def test_targets_per_second_with_short_gaps_filled(self):
+        a = {"own": [1, 0, 0], "opp": [0, 2, 0]}
+        b = {"own": [0, 3, 0], "opp": [0, 0, 1]}
+        steps = [step(180 - i) for i in range(2)]                    # 0〜1 秒目: 目盛りを読めない（None）
+        steps += [{**step(178), "targets": a}, {**step(177), "targets": b}]   # 2 秒目・3 秒目
+        steps += [step(176 - i) for i in range(5)]                   # 4〜8 秒目: 読めない（2 秒までは直前の値で埋める）
+        out = run(steps)
+        own1 = out["summary"]["targets"]["own"][0]
+        self.assertEqual(len(own1), 180)
+        self.assertEqual(own1[:9], "..1000...")
+        self.assertEqual(out["summary"]["targets"]["own"][1][:6], "..0333")
+        self.assertEqual(out["summary"]["targets"]["opp"][2][:6], "..0111")
+        self.assertTrue(own1[9:].strip(".") == "")
+
+    def test_no_targets_key_when_never_read(self):
+        out = run([step(180 - i) for i in range(3)])
+        self.assertNotIn("targets", out["summary"])
+
+
+class ReadTargetsTest(unittest.TestCase):
+    def test_counts_lit_cells_from_the_top(self):
+        hud = team_timeline.team_hud
+        f = np.full((1080, 1920, 3), 120, np.uint8)
+
+        def cell(side, slot, k, value):
+            x, y = hud.TARGET_X[side], hud.TARGET_SLOT_Y[side][slot] + hud.TARGET_SEG_DY[k]
+            f[y:y + 16, x - 1:x + 2] = value
+
+        cell("own", 0, 0, 230); cell("own", 0, 1, 230); cell("own", 0, 2, 80)   # 1 番: 2 機にロックされている
+        cell("opp", 2, 0, 230); cell("opp", 2, 1, 80); cell("opp", 2, 2, 230)   # 相手 3 番: 途中が暗いので 1
+        self.assertEqual(hud.read_targets(f), {"own": [2, 0, 0], "opp": [0, 0, 1]})
+        self.assertIsNone(hud.read_targets(np.zeros((4, 4, 3), np.uint8)))
 
 
 class StartEpochTest(unittest.TestCase):

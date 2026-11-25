@@ -8,6 +8,8 @@
     ▮の色（緑 = ALPHA・紫 = BETA）と番号（01〜03）。新しい行が下に足され、古い行が上から消える
   - 画面中央の「MAIN SYSTEM REBOOTING」（自分が撃破されて、再出撃を待っている）
   - 左の自チームの欄の、番号ごとのエンブレム（ロビーで撮った自分のエンブレムと照らし合わせて、自分の番号を決める）
+  - 左右の欄の、番号ごとの縦 3 マスの目盛り（被ターゲット数。光っているマスの数 = その機体をロックしている敵の数。上から光る。
+    ロックされていない機体は目盛りが出ない。光っていないマスは、背景より暗い）
 読まないもの: プレイヤー名、誰が撃破したか（ゲームは出さない）。
 
 テンプレートは scripts/make_team_hud_templates.py でチーム戦の録画から作る（ocr/team_hud_templates.py。ゲームの画面から作るため同梱しない）。
@@ -51,6 +53,12 @@ REBOOT_BOX = (780, 722, 1140, 750)
 # 自チームの欄のエンブレム（番号 1〜3 の順）とロビーのネームプレートのエンブレム
 EMBLEM_BOXES = ((126, 565, 170, 609), (126, 643, 170, 687), (126, 721, 170, 765))
 LOBBY_EMBLEM_BOX = (616, 302, 690, 376)
+# 被ターゲット数の目盛り: 列の x（幅 3px の中心）と、番号ごとの上のマスの上端の y。マスは 22px おきに 3 つ（高さ約 16px）
+TARGET_X = {"own": 177, "opp": 1740}
+TARGET_SLOT_Y = {"own": (550, 628, 706), "opp": (315, 385, 455)}
+TARGET_SEG_DY = (0, 22, 44)
+TARGET_SEG_ROWS = (3, 14)   # マスの中の、読む行（上端からの範囲。縁のにじみを避ける）
+TARGET_LIT = 40.0           # 光っているマス: 両脇の背景より、これだけ明るい（光っていないマスは背景より暗い）
 
 MIN_DIGIT = 0.55       # 数字のテンプレートとの近さ。これ未満の枠は、数字の無い枠（欄の端）とみなす
 MIN_TIMER = 0.5
@@ -238,6 +246,38 @@ def read_feed(f: np.ndarray) -> list[tuple[str, str, int]]:
         slot = read_slot(f, cy)
         if slot is not None:
             out.append((feed_kind(f, cy), side, slot))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 被ターゲット数（左右の欄の目盛り）
+# ---------------------------------------------------------------------------
+
+def target_contrast(g: np.ndarray, x: int, y: int) -> float:
+    """目盛りの 1 マスの明るさ − 両脇の背景の明るさ（g: グレーの 1920x1080）"""
+    a, b = y + TARGET_SEG_ROWS[0], y + TARGET_SEG_ROWS[1]
+    cell = float(g[a:b, x - 1:x + 2].mean())
+    side = np.concatenate([g[a:b, x - 6:x - 3].ravel(), g[a:b, x + 4:x + 7].ravel()])
+    return cell - float(np.median(side))
+
+
+def read_targets(f: np.ndarray) -> Optional[dict[str, list[int]]]:
+    """被ターゲット数 {"own": [1番, 2番, 3番], "opp": [...]}（0〜3）。上のマスから続けて光っている数（途中が暗ければ、そこまで）。
+    f は to_1080 でそろえた画面（大きさが違えば None）"""
+    if f is None or f.shape[0] != H or f.shape[1] != W:
+        return None
+    g = _gray(f).astype(np.float32)
+    out: dict[str, list[int]] = {}
+    for side, x in TARGET_X.items():
+        counts = []
+        for y0 in TARGET_SLOT_Y[side]:
+            n = 0
+            for dy in TARGET_SEG_DY:
+                if target_contrast(g, x, y0 + dy) < TARGET_LIT:
+                    break
+                n += 1
+            counts.append(n)
+        out[side] = counts
     return out
 
 
