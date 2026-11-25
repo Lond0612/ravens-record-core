@@ -2,10 +2,11 @@
 
 試合中の画面はチームのランクマッチと同じ（上のポイント・残り時間・自分の SCORE・撃破の流れ）なので、同じ部品
 （team_hud / TeamTimeline / match_end の帯）で読む。ランクマッチと違うところ:
-  - リザルト画面が無い（FINISH → YOU WIN / YOU LOSE の帯 → 通信中の表示 → ロード → ルームへ戻る）。
-    勝敗は帯から、ポイント（両チームの合計・自分の SCORE）は試合中の表示で最後に読めた値から、自分の陣営は上の見出しの色から決める
+  - 試合のあと（FINISH → YOU WIN / YOU LOSE の帯 → リザルト画面 → 通信中の表示 → ロード）は、ロビーではなくルームへ戻る。
+    リザルト画面はランクマッチと同じ読み取り（team_match.read_team_result）。読めなかったときは、勝敗は帯から、
+    ポイント（両チームの合計・自分の SCORE）は試合中の表示で最後に読めた値から、自分の陣営は上の見出しの色から決める
   - 制限時間がルームの設定で変わる（読めなければ 5 分とみなす）
-  - レートは無い。マップはルームの設定から
+  - レートは無い。マップはリザルト画面から（照合できなければルームの設定から）
 記録はチームのランクマッチと同じ形（team_match.build_payload）に match_kind = "custom" とルームの設定を足し、
 同じ保存先・同じ知らせ（on_team_match_*）で使う側のアプリへ渡す（送り先の表も team_matches。match_kind で分ける）。
 観戦（カメラのマーク）のときは記録しない。
@@ -24,6 +25,7 @@ from ravens_record_core.detectors.mode_detector import detect_current_screen_mod
 from ravens_record_core.detectors.team_timeline import TeamTimeline
 from ravens_record_core.monitor.base import MonitorContext, is_process_running, log
 from ravens_record_core.monitor.children import start_loading_watcher, stop_loading_watcher
+from ravens_record_core.monitor.team import RESULT_POLL_SEC, RESULT_WAIT_AFTER_BANNER_SEC, _read_result_screen
 
 DEFAULT_TIME_LIMIT_SEC = 300
 # 対戦の開始の合図から、試合が終わるまでを待つ最長の秒数（ロード ＋ 紹介 ＋ 制限時間 ＋ 余裕）
@@ -79,21 +81,27 @@ def _record(ctx: MonitorContext, settings) -> dict | None:
         return None
     ended_at = datetime.now().astimezone()
     ctx.set_status("post_match", "チームのカスタムマッチが終了しました。結果を保存しています", "status.customPostMatch")
+    # 帯のあとのリザルト画面（チームのランクマッチと同じ画面・同じ読み取り）
+    result = _wait_result_screen(ctx)
     _wait_room_return(ctx)
 
     hud = timeline.hud_totals()
-    payload = team_match.build_payload(played_at, ended_at, None, banner, timeline.hud_side, None, None, _app_version(ctx))
+    if result is not None:
+        for note in result.settle_points(hud.get("own"), hud.get("opp")):
+            log(f"[カスタム] リザルト画面の合計を直しました: {note}")
+    payload = team_match.build_payload(played_at, ended_at, result, banner, timeline.hud_side, None, None, _app_version(ctx))
+    # リザルト画面を読めなかったときは、試合中の表示で最後に読めた値で補う
     if payload["own_side"] is not None:
-        payload["own_points"] = hud.get("own")
-        payload["opp_points"] = hud.get("opp")
-        payload["own_score"] = hud.get("score")
+        for key, field in (("own_points", "own"), ("opp_points", "opp"), ("own_score", "score")):
+            if payload[key] is None:
+                payload[key] = hud.get(field)
     payload["match_kind"] = "custom"
-    payload["result_basis"] = "banner"
     payload["settings_raw"] = {"format_raw": settings.format_raw, "time_limit_raw": settings.time_limit_raw,
                                "swap_mode_raw": settings.swap_mode_raw, "map_raw": settings.map_raw}
-    payload["map_raw"] = settings.map_raw or None
-    payload["map_hint"] = ({"match": settings.map_match, "score": settings.read_confidence.get("map", 0.0), "lang": settings.game_lang}
-                           if settings.map_match else None)
+    # マップ: リザルト画面で照合できなければ、ルームの設定から
+    if payload.get("map_hint") is None and settings.map_match:
+        payload["map_raw"] = settings.map_raw or None
+        payload["map_hint"] = {"match": settings.map_match, "score": settings.read_confidence.get("map", 0.0), "lang": settings.game_lang}
     detail = timeline.finish(payload["own_side"], payload["own_points"], payload["opp_points"], payload["own_score"])
     if detail is not None:
         payload.update(detail)
@@ -152,6 +160,20 @@ def _watch_until_banner(ctx: MonitorContext, started: float, timeline: TeamTimel
                 log(f"[カスタム] チームの対戦の終わりを確認しないまま {mode} の画面に戻りました。記録しません。")
                 return None
         time.sleep(BANNER_POLL_SEC if searching else POLL_SEC)
+
+
+def _wait_result_screen(ctx: MonitorContext):
+    """帯のあと、リザルト画面を待って読む（monitor/team.py と同じ読み方）。出なければ None"""
+    end = time.monotonic() + RESULT_WAIT_AFTER_BANNER_SEC
+    while time.monotonic() < end:
+        if not is_process_running(ctx.trigger_exe):
+            return None
+        frame = _capture(ctx)
+        if frame is not None and team_match.read_team_result(frame, with_map=False) is not None:
+            return _read_result_screen(ctx, frame)
+        time.sleep(RESULT_POLL_SEC)
+    log("[カスタム] 帯のあと、リザルト画面を読めませんでした。帯の勝敗と試合中の表示で記録します。")
+    return None
 
 
 def _wait_room_return(ctx: MonitorContext) -> bool:
