@@ -51,6 +51,9 @@ class FakeTimeline:
     def hud_totals(self):
         return dict(self._hud)
 
+    def start_epoch(self):
+        return 1_700_000_000.0
+
     def finish(self, own_side, own, opp, score):
         return {"timeline": [["p", 10.0, 109, 0, 109, 42, 0], ["r", 20.0], ["d", 21.0, "b", 2], ["u", 30.0]],
                 "summary": {"team_kills": 1, "own_slot": 3, "priority_sec": {"a": {"3": 100}}, "targets": {"own": ["0"] * 3, "opp": ["1"] * 3}}}
@@ -84,6 +87,7 @@ class SpectatedTest(unittest.TestCase):
         self.assertEqual(payload["map_hint"]["match"], "汚染市街 - B")
         ctx.hooks.on_custom_match.assert_called_once()
         self.assertEqual(ctx.hooks.on_custom_match.call_args.args[0], CUSTOM_TEAM_SPECTATED)
+        ctx.hooks.on_team_match_clock.assert_called_once_with(1_700_000_000.0)  # 観戦のクリップの再生位置と合わせる
         # 観戦では意味の無いもの（自分の SCORE の増え・REBOOTING・自分の番号）は除く
         self.assertEqual(payload["timeline"], [["p", 10.0, 109, 0, 109, None, 0], ["d", 21.0, "b", 2]])
         self.assertEqual(set(payload["summary"]), {"priority_sec", "targets"})

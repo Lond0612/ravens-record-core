@@ -188,6 +188,9 @@ def _record_spectated(ctx: MonitorContext, settings, started_at: datetime, start
     detail = timeline.finish("ALPHA", alpha, beta, None)
     if detail is not None:
         payload.update(team_match.spectated_timeline(detail))
+    # 試合の流れの 0 秒目の時刻（観戦のクリップの再生位置と合わせる。記録には入れない）
+    if (start_epoch := timeline.start_epoch()) is not None:
+        ctx.hooks.on_team_match_clock(start_epoch)
     path = matchlog.write_team_match(ctx.config.logs_dir, {**payload, "played_at": payload["started_at"], "spectated": True,
                                                             "own_points": alpha, "opp_points": beta}, ended_at)
     if ctx.hooks.on_custom_match(CUSTOM_TEAM_SPECTATED, payload, path):
