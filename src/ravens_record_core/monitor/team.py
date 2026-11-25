@@ -147,7 +147,7 @@ def _record(ctx: MonitorContext) -> dict | None:
     if debug:
         debug.image("lobby_emblem.png", emblem)
         debug.image("lobby.jpg", lobby, DEBUG_FRAME_WIDTH)
-    rate_before, rate_note = _read_rate_before(ctx)
+    rate_before, rate_note, place_before = _read_rate_before(ctx)
     ctx.set_status("in_match", "チーム戦の対戦中です", "status.teamInMatch")
 
     ended = _watch_until_result(ctx, started, timeline, debug)
@@ -159,15 +159,17 @@ def _record(ctx: MonitorContext) -> dict | None:
     ended_at = datetime.now().astimezone()
     ctx.set_status("post_match", "チーム戦の対戦が終了しました。結果を保存しています", "status.teamPostMatch")
 
-    rate_after = None
+    rate_after = place_after = None
     if (rate_before is not None or rate_note != "not_s_rank") and _wait_for_team_lobby(ctx):
-        rate_after = _read_rate_after(ctx, rate_before, rate_note)
+        rate_after, place_after = _read_rate_after(ctx, rate_before, rate_note)
 
     if result is not None:
         hud = timeline.hud_totals()
         for note in result.settle_points(hud.get("own"), hud.get("opp")):
             log(f"[チーム戦] リザルト画面の合計を直しました: {note}")
     payload = team_match.build_payload(played_at, ended_at, result, banner, hud_side, rate_before, rate_after, _app_version(ctx))
+    # 総合順位（ロビーの RANK の PLACE。S ランクだけ）。本人の記録としてだけ使う
+    payload["place_before"], payload["place_after"] = place_before, place_after
     # 試合の流れ（ポイントの推移・撃破・プライオリティ・自分の撃破）。最後の合計は、リザルト画面の値で補う
     detail = timeline.finish(payload["own_side"], payload["own_points"], payload["opp_points"], payload["own_score"])
     if detail is not None:
@@ -191,26 +193,27 @@ def _record(ctx: MonitorContext) -> dict | None:
     return payload
 
 
-def _read_rate_before(ctx: MonitorContext) -> tuple[int | None, str | None]:
-    """対戦前のレート（S ランクのときだけ。ロビーの MATCH INFO の配置はシングルと同じ）"""
+def _read_rate_before(ctx: MonitorContext) -> tuple[int | None, str | None, int | None]:
+    """対戦前のレートと総合順位（S ランクのときだけ。ロビーの MATCH INFO の配置はシングルと同じ）。(レート, 読めなかった理由, 順位)"""
     trace: dict = {}
     res = capture_stable_rate(lambda: _capture(ctx), trace=trace)
     if res and res.is_s_rank:
-        return res.rate, None
+        return res.rate, None, res.s_rank_position
     if res:
         log("[チーム戦] Sランクではないため、レートは記録しません。")
-        return None, "not_s_rank"
+        return None, "not_s_rank", None
     log_rate_failure("対戦前レート（チーム戦）", trace)
-    return None, trace.get("reason")
+    return None, trace.get("reason"), None
 
 
-def _read_rate_after(ctx: MonitorContext, rate_before: int | None, rate_note: str | None) -> int | None:
+def _read_rate_after(ctx: MonitorContext, rate_before: int | None, rate_note: str | None) -> tuple[int | None, int | None]:
+    """対戦後のレートと総合順位。(レート, 順位)"""
     trace: dict = {}
     res = read_rate_after(rate_before, lambda: _capture(ctx), trace=trace, require_s_rank=rate_note == "not_s_rank")
     if res:
-        return res.rate
+        return res.rate, res.s_rank_position
     log_rate_failure("対戦後レート（チーム戦）", trace)
-    return None
+    return None, None
 
 
 def _watch_until_result(ctx: MonitorContext, started: float, timeline: TeamTimeline | None = None, debug: TeamDebug | None = None):

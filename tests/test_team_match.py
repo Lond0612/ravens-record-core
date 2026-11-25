@@ -126,11 +126,11 @@ class FlowTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def run_flow(self, ended, rate=(None, "not_s_rank")):
+    def run_flow(self, ended, rate=(None, "not_s_rank", None)):
         with mock.patch.object(team, "_read_rate_before", return_value=rate), \
              mock.patch.object(team, "_watch_until_result", return_value=ended), \
              mock.patch.object(team, "_wait_for_team_lobby", return_value=True) as lobby, \
-             mock.patch.object(team, "_read_rate_after", return_value=1810):
+             mock.patch.object(team, "_read_rate_after", return_value=(1810, 455)):
             return team.record_team_match(self.ctx), lobby
 
     def test_saved_with_result(self):
@@ -140,8 +140,9 @@ class FlowTest(unittest.TestCase):
         lobby.assert_not_called()  # S ランクでなければ、対戦後のレートは読まない
 
     def test_s_rank_reads_rate_after(self):
-        payload, lobby = self.run_flow((result(), None, "ALPHA"), rate=(1800, None))
+        payload, lobby = self.run_flow((result(), None, "ALPHA"), rate=(1800, None, 467))
         self.assertEqual((payload["rate_before"], payload["rate_after"]), (1800, 1810))
+        self.assertEqual((payload["place_before"], payload["place_after"]), (467, 455))
 
     def test_not_saved_when_match_did_not_finish(self):
         payload, _ = self.run_flow(None)
