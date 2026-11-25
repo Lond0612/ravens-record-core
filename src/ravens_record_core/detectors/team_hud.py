@@ -174,8 +174,8 @@ def read_field(f: np.ndarray, field: str) -> Optional[int]:
     return int(text)
 
 
-def read_timer(f: np.ndarray) -> Optional[int]:
-    """残り時間（秒）。読めなければ None"""
+def read_timer(f: np.ndarray, max_sec: int = 180) -> Optional[int]:
+    """残り時間（秒）。読めなければ None。max_sec: 試合の長さ（それより長い値は読み誤り。チームのカスタムマッチは、ルームの制限時間）"""
     templates = _DIGITS.get("timer")
     if not templates:
         return None
@@ -186,7 +186,7 @@ def read_timer(f: np.ndarray) -> Optional[int]:
             return None
         digits.append(d)
     mm, ss = int("".join(digits[:2])), int("".join(digits[2:]))
-    if ss >= 60 or mm * 60 + ss > 180:
+    if ss >= 60 or mm * 60 + ss > max_sec:
         return None
     return mm * 60 + ss
 

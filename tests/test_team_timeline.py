@@ -21,7 +21,7 @@ class Script:
         return self.steps[min(self.i, len(self.steps) - 1)]
 
 
-def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None)):
+def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None), match_sec=180, timer_calls=None):
     """steps: [{"timer": 残り秒, "own":, "opp":, "score":, "feed": [(種類, 陣営, 番号)], "reboot": bool}]（1 秒ごと）"""
     s = Script(steps)
     cur = {}
@@ -29,7 +29,7 @@ def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None)):
     patches = [
         mock.patch.object(hud, "available", return_value=True),
         mock.patch.object(hud, "to_1080", side_effect=lambda f: (cur.clear(), cur.update(s.next()), f)[2]),
-        mock.patch.object(hud, "read_timer", side_effect=lambda f: cur.get("timer")),
+        mock.patch.object(hud, "read_timer", side_effect=lambda f, max_sec=180: (timer_calls.append(max_sec) if timer_calls is not None else None, cur.get("timer"))[1]),
         mock.patch.object(hud, "read_field", side_effect=lambda f, k: cur.get(k)),
         mock.patch.object(hud, "read_feed", side_effect=lambda f: cur.get("feed", [])),
         mock.patch.object(hud, "is_rebooting", side_effect=lambda f: cur.get("reboot", False)),
@@ -40,7 +40,7 @@ def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None)):
     for p in patches:
         p.start()
     try:
-        tl = TeamTimeline(emblem=np.zeros((10, 10, 3), np.uint8) if emblem_scores else None)
+        tl = TeamTimeline(emblem=np.zeros((10, 10, 3), np.uint8) if emblem_scores else None, match_sec=match_sec)
         for i in range(len(steps)):
             tl.observe(1000.0 + i, np.zeros((4, 4, 3), np.uint8))
         return tl.finish(own_side, *finals)
@@ -150,6 +150,23 @@ class ReadTargetsTest(unittest.TestCase):
         cell("opp", 2, 0, 230); cell("opp", 2, 1, 80); cell("opp", 2, 2, 230)   # 相手 3 番: 途中が暗いので 1
         self.assertEqual(hud.read_targets(f), {"own": [2, 0, 0], "opp": [0, 0, 1]})
         self.assertIsNone(hud.read_targets(np.zeros((4, 4, 3), np.uint8)))
+
+
+class LongMatchTest(unittest.TestCase):
+    def test_five_minute_room_reads_timer_above_three_minutes(self):
+        calls = []
+        steps = [step(300 - i) for i in range(3)] + [step(297, own=100), step(296, own=100)]
+        out = run(steps, match_sec=300, timer_calls=calls)
+        self.assertEqual(set(calls), {300})   # 残り時間は、ルームの制限時間まで読む
+        self.assertEqual([e[:3] for e in out["timeline"] if e[0] == "p"], [["p", 3.0, 100]])
+        self.assertEqual(len(out["summary"]["targets"]["own"][0]) if "targets" in out["summary"] else 300, 300)
+
+    def test_read_timer_limit(self):
+        hud = team_timeline.team_hud
+        digits = iter(["0", "5", "0", "0"] * 2)
+        with mock.patch.object(hud, "_DIGITS", {"timer": {"0": None}}),                 mock.patch.object(hud, "timer_cells", return_value=[np.zeros((4, 4))] * 4),                 mock.patch.object(hud, "norm_cell", side_effect=lambda c: c),                 mock.patch.object(hud, "_best", side_effect=lambda c, t: (next(digits), 1.0)):
+            self.assertIsNone(hud.read_timer(np.zeros((4, 4, 3), np.uint8)))            # ランクマッチ: 3:00 より長いのは読み誤り
+            self.assertEqual(hud.read_timer(np.zeros((4, 4, 3), np.uint8), 300), 300)   # 5 分のルーム
 
 
 class StartEpochTest(unittest.TestCase):

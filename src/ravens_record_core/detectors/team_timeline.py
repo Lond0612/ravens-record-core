@@ -91,7 +91,7 @@ class TeamTimeline:
         if not team_hud.available() or frame is None:
             return
         f = team_hud.to_1080(frame)
-        remaining = team_hud.read_timer(f)
+        remaining = team_hud.read_timer(f, self.match_sec)
         self.timer_visible = remaining is not None   # この回に残り時間が読めたか（チームのカスタムマッチで、試合の終わりを探す手がかり）
         if remaining is not None:
             t = float(self.match_sec - remaining)
