@@ -107,7 +107,30 @@ class LowLoadTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False), \
                 mock.patch("psutil.Process") as proc, mock.patch("cv2.setNumThreads") as threads:
             os.environ.pop("OMP_THREAD_LIMIT", None)
+            os.environ.pop(lowload.PRIORITY_ENV, None)
             lowload.apply()
             self.assertEqual(os.environ["OMP_THREAD_LIMIT"], "1")
         threads.assert_called_once_with(1)
         proc.return_value.nice.assert_called_once()
+
+    def test_starvation_needs_two_late_wakeups_within_a_minute(self):
+        from ravens_record_core.system import lowload
+        watch = lowload.StarvationWatch()
+        self.assertFalse(watch.note(100.0, 0.01))
+        self.assertFalse(watch.note(101.0, 5.0))    # 1 回だけの遅れ（スリープからの復帰など）
+        self.assertFalse(watch.note(200.0, 3.0))    # 前の遅れから 60 秒より後
+        self.assertTrue(watch.note(230.0, 2.5))     # 60 秒の間に 2 回
+
+    def test_boost_sets_normal_priority_once(self):
+        from ravens_record_core.system import lowload
+        import os
+        with mock.patch.dict(lowload._state, {"boosted": False}), mock.patch.dict(os.environ, {}, clear=False),                 mock.patch("psutil.Process") as proc:
+            lowload.boost("test")
+            lowload.boost("test")
+            self.assertTrue(lowload.status()["boosted"])
+            self.assertEqual(os.environ[lowload.PRIORITY_ENV], "1")
+            # 子プロセス: 知らせがあれば、優先度を下げない
+            proc.reset_mock()
+            with mock.patch("cv2.setNumThreads"):
+                lowload.apply()
+            proc.return_value.nice.assert_not_called()

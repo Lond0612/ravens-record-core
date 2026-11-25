@@ -22,6 +22,10 @@ from ravens_record_core.monitor.screen import screen_watcher
 # 以前は待ち始めからの時間で判断していて、裏に回していた 20 分ほどのあと、手前に戻して 1 分で知らせていた
 STATUS_UNREADABLE_SEC = 600.0
 STATUS_UNREADABLE_MIN_BAND_READS = 60
+# さらに、帯が出ているのに読めなかった回が STATUS_UNREADABLE_MIN_STREAK 回（約 1 秒ごと）以上続いたときだけ聞く（v2.2〜）。
+# マッチング中の帯は、マッチングしている間ずっと出ている。ロビーのほかの表示の黄色い画素が、ときどき帯と見分けられない
+# だけのときは続かない（2026-11: 新しく入れた人が、ロビーで 17 分、試合をせずにいただけで知らせていた）
+STATUS_UNREADABLE_MIN_STREAK = 20
 
 # 以前は「RANK MATCH: SINGLE が 45 秒読めなければ待機をやめる」時間切れがあったが、マッチング中・チャット中などで
 # 見出しが読めない間に待機をやめ、そのまま試合に入ると記録されなかったため、なくした（2026-10）。
@@ -68,6 +72,8 @@ def _maybe_report_status_unreadable(ctx: MonitorContext, watcher: ScreenStateWat
         return
     if waited_sec < STATUS_UNREADABLE_SEC or reads < STATUS_UNREADABLE_MIN_BAND_READS:
         return
+    if status_detector.health_snapshot().get("band_unread_streak_max", 0) < STATUS_UNREADABLE_MIN_STREAK:
+        return
     ctx.status_unreadable_reported = True
     log(f"[対戦待機] [警告] ランクマッチのロビーで {waited_sec / 60:.0f} 分間、「マッチングしています / 対戦を開始します」を"
         "一度も読めていません。対戦の開始を検出できていない可能性があります。")
@@ -84,6 +90,7 @@ def _wait_for_match_start(ctx: MonitorContext, watcher: ScreenStateWatcher, mode
     last_status_log = 0.0
     wait_started = time.monotonic()
     reads_at_start = _band_unread_reads()
+    status_detector.reset_band_streak()
     seen_sec = 0.0  # 画面を撮れていた間の、待った時間
     last_tick = wait_started
     last_no_frame = _no_frame_reads()

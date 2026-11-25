@@ -94,6 +94,7 @@ _health: dict = {
     "reads": 0,           # OCR まで行った回数
     "recognized": 0,      # 状態を読めた回数
     "band_unread": 0,     # 帯（黄色い文字）が出ているのに、状態を読めなかった回数（status_unreadable は、これで判断する）
+    "band_unread_streak_max": 0,  # 帯が出ているのに読めなかった回が、続いたいちばん長い回数（reset_band_streak から。status_unreadable）
     "no_frame": 0,        # 画面を撮れなかった・最小化中の回数
     "last_frame": None,   # 最後に撮れたゲームの画面の大きさ（幅 x 高さ）と、黒い帯を除いたか
     "recent_raw": [],     # 最近の、読めなかったときの文字（重複を除いて 5 件まで）
@@ -101,6 +102,15 @@ _health: dict = {
     "tesseract": None,
 }
 _ocr_langs: Optional[str] = None
+# 帯が出ているのに読めなかった回が続いた数。帯が出ていない回が BAND_STREAK_GAP 回までなら、続いているとみなす（帯の点滅など）
+BAND_STREAK_GAP = 2
+_streak = {"n": 0, "gap": 0}
+
+
+def reset_band_streak() -> None:
+    """「読めなかった回が続いた数」を数え直す（ロビーで待ち始めるとき）"""
+    _streak["n"] = _streak["gap"] = 0
+    _health["band_unread_streak_max"] = 0
 
 
 def health_snapshot() -> dict:
@@ -301,9 +311,17 @@ def _note_read(roi_img: np.ndarray, result: StatusResult) -> None:
     _health["reads"] += 1
     if result.status is not None:
         _health["recognized"] += 1
+        _streak["n"] = _streak["gap"] = 0
         return
     if band_visible(roi_img):
         _health["band_unread"] += 1
+        _streak["n"] += 1
+        _streak["gap"] = 0
+        _health["band_unread_streak_max"] = max(_health["band_unread_streak_max"], _streak["n"])
+    else:
+        _streak["gap"] += 1
+        if _streak["gap"] > BAND_STREAK_GAP:
+            _streak["n"] = 0
     raw = (result.raw_text or "").strip()
     recent = _health["recent_raw"]
     if raw and raw[:40] not in recent:
