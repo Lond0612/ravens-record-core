@@ -12,6 +12,7 @@
   ["q", t, "a" | "b", 番号]   プライオリティ・ターゲットが、その機体に移った
   ["r", t]                    自分が撃破された（MAIN SYSTEM REBOOTING が出た）
   ["u", t]                    自分が再出撃した（REBOOTING が消えた）
+  ["t", t, "a" | "b", 番号]   TA（ターミナルアーマー）を展開した
 ポイントは、2 回続けて同じ値が読めたら採用する（減らない・1 回で 400 を超えて増えない）。最後の合計は、リザルト画面の値で補う。
 流れる表示の行は数秒出ている。直近 FEED_MEMORY_SEC 秒に見た同じ行（陣営・番号・種類）の数を超えた分だけを、新しい出来事にする
 （行の動き出しなどで、ある回だけ読めなかった行を、次の回に二重に数えないため。同じ機体が数秒のうちに 2 回撃破されることは無い）。
@@ -42,6 +43,7 @@ MERGE_SEC = 2.5         # この秒数以内のポイントの変化は、1 つ�
 DEATH_MATCH_SEC = 6.0   # 自分の REBOOTING と、自チームの「撃破」を同じ出来事とみなす時刻の差（REBOOTING は撃破の 4 秒ほどあとに出る）
 FEED_MEMORY_SEC = 5.0   # 流れる表示の行を、同じ行とみなす時間
 TARGET_FILL_SEC = 2     # 被ターゲット数: 読めなかった秒を、直前の値で埋める上限
+TA_CONFIRM = 2          # TA: 展開・終了とみなす連続の読み取り回数
 SIDE_CODE = {"ALPHA": "a", "BETA": "b"}
 
 
@@ -79,6 +81,10 @@ class TeamTimeline:
         self.events: list[list] = []
         self.feed_seen: deque = deque()   # (時刻, その回に見えた行の数え)
         self.target_reads: dict[int, dict] = {}   # 試合の秒 → その秒に最後に読めた被ターゲット数
+        self.ta_active: dict[tuple[str, int], bool] = {}
+        self.ta_pending: dict[tuple[str, int], float] = {}
+        self.ta_off: dict[tuple[str, int], int] = {}
+        self.ta_events: list[tuple[float, str, int]] = []   # (時刻, "own" | "opp", 番号 1〜3)
         self.rebooting = False
         self.hud_side: Optional[str] = None
         self.emblem_slot: Optional[int] = None
@@ -131,10 +137,14 @@ class TeamTimeline:
         if targets is not None and 0 <= t < self.match_sec:
             self.target_reads[int(t)] = targets
 
+        ta = team_hud.read_ta(f)
+        if ta is not None and 0 <= t < self.match_sec:
+            self._update_ta(t, ta)
+
         rebooting = team_hud.is_rebooting(f)
         if self.debug is not None:
             self.debug.append({"wall": round(wall, 2), "t": t, "timer": remaining, **reads, "feed": feed, "reboot": rebooting,
-                               "targets": targets,
+                               "targets": targets, "ta": ta,
                                "emblem": [round(s, 3) for s in emblem_scores] if emblem_scores else None, "side": self.hud_side})
         if rebooting != self.rebooting:
             self.events.append(["r" if rebooting else "u", t])
@@ -151,6 +161,32 @@ class TeamTimeline:
             new += [row] * max(0, n - seen)
         self.feed_seen.append((t, now))
         return new
+
+    def _update_ta(self, t: float, ta: dict[str, list[bool]]) -> None:
+        """TA の読み取りを反映する。2 回続けて True で展開、いったん 2 回続けて False で次を数えられるようにする"""
+        for side in ("own", "opp"):
+            flags = ta.get(side)
+            if not flags:
+                continue
+            for i, on in enumerate(flags):
+                key = (side, i + 1)
+                if self.ta_active.get(key):
+                    if on:
+                        self.ta_off[key] = 0
+                    else:
+                        self.ta_off[key] = self.ta_off.get(key, 0) + 1
+                        if self.ta_off[key] >= TA_CONFIRM:
+                            self.ta_active[key] = False
+                            self.ta_off[key] = 0
+                elif on:
+                    if key in self.ta_pending:
+                        self.ta_events.append((self.ta_pending.pop(key), side, i + 1))
+                        self.ta_active[key] = True
+                        self.ta_off[key] = 0
+                    else:
+                        self.ta_pending[key] = t
+                else:
+                    self.ta_pending.pop(key, None)
 
     def start_epoch(self) -> Optional[float]:
         """試合の流れの 0 秒目の時刻（time.time() の値）。observe に渡した時刻は time.monotonic() なので、いまの差で直す。
@@ -178,13 +214,21 @@ class TeamTimeline:
             if final is not None and final > conf.value:
                 self.changes.append((end_t, field, conf.value, final))
                 conf.value = final
-        timeline = self._point_events() + self.events
-        timeline.sort(key=lambda e: (e[1], "pdqru".index(e[0])))
+        timeline = self._point_events() + self.events + self._ta_timeline(own_side)
+        timeline.sort(key=lambda e: (e[1], "pdqrut".index(e[0])))
         summary = self._summary(timeline, own_side)
         targets = self._target_series()
         if targets is not None:
             summary["targets"] = targets
         return {"timeline": timeline, "summary": summary}
+
+    def _ta_timeline(self, own_side: Optional[str]) -> list[list]:
+        """控えておいた TA の展開を、陣営コード（a / b）に直して出来事にする。陣営が分からなければ空"""
+        own_code = SIDE_CODE.get(own_side) if own_side else None
+        if not own_code:
+            return []
+        opp_code = "b" if own_code == "a" else "a"
+        return [["t", t, own_code if side == "own" else opp_code, slot] for t, side, slot in self.ta_events]
 
     def _target_series(self) -> Optional[dict]:
         """被ターゲット数の、試合の秒ごとの並び（summary の targets）。一度も読めていなければ None"""

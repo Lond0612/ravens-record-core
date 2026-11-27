@@ -10,6 +10,8 @@
   - 左の自チームの欄の、番号ごとのエンブレム（ロビーで撮った自分のエンブレムと照らし合わせて、自分の番号を決める）
   - 左右の欄の、番号ごとの縦 3 マスの目盛り（被ターゲット数。光っているマスの数 = その機体をロックしている敵の数。上から光る。
     ロックされていない機体は目盛りが出ない。光っていないマスは、背景より暗い）
+  - 左右の欄の、番号ごとの 2 本のバー（TA = ターミナルアーマー。展開中は、上の衝撃値のバーが水色がかった白になり、
+    下の AP のバーが空になる。水色のバーは満タンから 5 秒かけて半分ほどまで減って消える）
 読まないもの: プレイヤー名、誰が撃破したか（ゲームは出さない）。
 
 テンプレートは scripts/make_team_hud_templates.py でチーム戦の録画から作る（ocr/team_hud_templates.py。ゲームの画面から作るため同梱しない）。
@@ -59,6 +61,19 @@ TARGET_SLOT_Y = {"own": (550, 628, 706), "opp": (315, 385, 455)}
 TARGET_SEG_DY = (0, 22, 44)
 TARGET_SEG_ROWS = (3, 14)   # マスの中の、読む行（上端からの範囲。縁のにじみを避ける）
 TARGET_LIT = 40.0           # 光っているマス: 両脇の背景より、これだけ明るい（光っていないマスは背景より暗い）
+# TA（ターミナルアーマー）: 左右の欄の 2 本のバー（端の縁を避けた内側。行は各バーの中身の 3 行）
+TA_BAR_X = {"own": (196, 328), "opp": (1592, 1726)}
+TA_UPPER_Y = {"own": (594, 672, 750), "opp": (359, 429, 499)}   # 上のバー（衝撃値）の中身の上端
+TA_AP_Y = {"own": (606, 684, 762), "opp": (370, 440, 510)}      # 下のバー（AP）の中身の上端
+TA_BAR_H = 3
+TA_HUE = (80, 110)          # TA 中の上のバー（OpenCV の HSV。H は 0〜179）
+TA_SAT = (30, 140)
+TA_VAL_MIN = 200
+TA_UPPER_RATIO = 0.45       # 上のバーに TA の色が占める割合の下限。展開した直後は 0.97 ほど（区切りが 3 か所あるため 1.0 にはならない）で、
+                            # 5 秒かけて 0.5 ほどまで減ってから消える（チーム戦の録画 7 本で実測）。約 1 秒ごとの読み取りで 2 回続けて捉えるため、低めにする
+TA_AP_WHITE_SAT_MAX = 60    # AP の白とみなす彩度の上限・明度の下限
+TA_AP_WHITE_VAL_MIN = 200
+TA_AP_WHITE_RATIO_MAX = 0.05  # AP のバーが空とみなす白の割合の上限
 
 MIN_DIGIT = 0.55       # 数字のテンプレートとの近さ。これ未満の枠は、数字の無い枠（欄の端）とみなす
 MIN_TIMER = 0.5
@@ -278,6 +293,39 @@ def read_targets(f: np.ndarray) -> Optional[dict[str, list[int]]]:
                 n += 1
             counts.append(n)
         out[side] = counts
+    return out
+
+
+# ---------------------------------------------------------------------------
+# TA（左右の欄のバー）
+# ---------------------------------------------------------------------------
+
+def _bar_hsv(f: np.ndarray, x0: int, x1: int, y: int) -> np.ndarray:
+    """バーの中身の 3 行を縦に中央値でまとめて、横 1 列ずつの HSV にする"""
+    row = np.median(f[y:y + TA_BAR_H, x0:x1, :3], axis=0).astype(np.uint8)
+    return cv2.cvtColor(row[np.newaxis, :, :], cv2.COLOR_BGR2HSV)[0]
+
+
+def read_ta(f: np.ndarray) -> Optional[dict[str, list[bool]]]:
+    """TA（ターミナルアーマー）を展開しているか {"own": [1番, 2番, 3番], "opp": [...]}。
+    上の衝撃値のバーの TA_UPPER_RATIO 以上が TA の色、かつ下の AP のバーが空なら True。
+    f は to_1080 でそろえた画面（大きさが違えば None）"""
+    if f is None or f.ndim != 3 or f.shape[0] != H or f.shape[1] != W or f.shape[2] < 3:
+        return None
+    out: dict[str, list[bool]] = {}
+    for side, (x0, x1) in TA_BAR_X.items():
+        flags = []
+        for uy, ay in zip(TA_UPPER_Y[side], TA_AP_Y[side]):
+            upper = _bar_hsv(f, x0, x1, uy)
+            uh, us, uv = upper[:, 0], upper[:, 1], upper[:, 2]
+            upper_ok = float(((uh >= TA_HUE[0]) & (uh <= TA_HUE[1])
+                              & (us >= TA_SAT[0]) & (us <= TA_SAT[1])
+                              & (uv >= TA_VAL_MIN)).mean()) >= TA_UPPER_RATIO
+            ap = _bar_hsv(f, x0, x1, ay)
+            ap_empty = float(((ap[:, 1] < TA_AP_WHITE_SAT_MAX)
+                              & (ap[:, 2] >= TA_AP_WHITE_VAL_MIN)).mean()) < TA_AP_WHITE_RATIO_MAX
+            flags.append(upper_ok and ap_empty)
+        out[side] = flags
     return out
 
 

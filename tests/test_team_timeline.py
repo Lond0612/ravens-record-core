@@ -34,6 +34,7 @@ def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None), 
         mock.patch.object(hud, "read_feed", side_effect=lambda f: cur.get("feed", [])),
         mock.patch.object(hud, "is_rebooting", side_effect=lambda f: cur.get("reboot", False)),
         mock.patch.object(hud, "read_targets", side_effect=lambda f: cur.get("targets")),
+        mock.patch.object(hud, "read_ta", side_effect=lambda f: cur.get("ta")),
         mock.patch.object(hud, "emblem_scores", return_value=emblem_scores or [0.0, 0.0, 0.0]),
         mock.patch.object(team_timeline.match_end, "read_own_side", return_value=own_side),
     ]
@@ -49,8 +50,8 @@ def run(steps, emblem_scores=None, own_side="ALPHA", finals=(None, None, None), 
             p.stop()
 
 
-def step(timer, own=0, opp=0, score=0, feed=(), reboot=False):
-    return {"timer": timer, "own": own, "opp": opp, "score": score, "feed": list(feed), "reboot": reboot}
+def step(timer, own=0, opp=0, score=0, feed=(), reboot=False, ta=None):
+    return {"timer": timer, "own": own, "opp": opp, "score": score, "feed": list(feed), "reboot": reboot, "ta": ta}
 
 
 class TimelineTest(unittest.TestCase):
@@ -150,6 +151,94 @@ class ReadTargetsTest(unittest.TestCase):
         cell("opp", 2, 0, 230); cell("opp", 2, 1, 80); cell("opp", 2, 2, 230)   # 相手 3 番: 途中が暗いので 1
         self.assertEqual(hud.read_targets(f), {"own": [2, 0, 0], "opp": [0, 0, 1]})
         self.assertIsNone(hud.read_targets(np.zeros((4, 4, 3), np.uint8)))
+
+
+class ReadTaTest(unittest.TestCase):
+    def test_detects_ta_bar_with_empty_ap(self):
+        hud = team_timeline.team_hud
+        f = np.zeros((1080, 1920, 3), np.uint8)
+        x0, x1 = hud.TA_BAR_X["opp"]
+        uy = hud.TA_UPPER_Y["opp"][0]
+        ay = hud.TA_AP_Y["opp"][0]
+
+        # opp 1 番: 上のバーが TA の色（水色がかった白）、AP のバーは暗いまま
+        f[uy:uy + hud.TA_BAR_H, x0:x1] = (255, 250, 188)
+        self.assertEqual(hud.read_ta(f), {"own": [False, False, False], "opp": [True, False, False]})
+
+        # 上のバーが TA の色でも、AP のバーが白で残っていれば False
+        f[ay:ay + hud.TA_BAR_H, x0:x1] = (255, 255, 240)
+        self.assertEqual(hud.read_ta(f), {"own": [False, False, False], "opp": [False, False, False]})
+
+        # AP のバーが空でも、上のバーが黄色なら False
+        f[ay:ay + hud.TA_BAR_H, x0:x1] = (0, 0, 0)
+        f[uy:uy + hud.TA_BAR_H, x0:x1] = (130, 225, 252)
+        self.assertEqual(hud.read_ta(f), {"own": [False, False, False], "opp": [False, False, False]})
+
+        # TA のバーは 5 秒かけて減る: 左から 6 割だけ TA の色でも True（AP は空）
+        f[uy:uy + hud.TA_BAR_H, x0:x1] = (0, 0, 0)
+        f[uy:uy + hud.TA_BAR_H, x0:x0 + (x1 - x0) * 6 // 10] = (255, 250, 188)
+        self.assertEqual(hud.read_ta(f)["opp"], [True, False, False])
+        # 3 割しか無ければ False（消えかけ・ほかの色のにじみ）
+        f[uy:uy + hud.TA_BAR_H, x0:x1] = (0, 0, 0)
+        f[uy:uy + hud.TA_BAR_H, x0:x0 + (x1 - x0) * 3 // 10] = (255, 250, 188)
+        self.assertEqual(hud.read_ta(f)["opp"], [False, False, False])
+
+        # 大きさの違う画面は None
+        self.assertIsNone(hud.read_ta(np.zeros((4, 4, 3), np.uint8)))
+
+
+class TaTimelineTest(unittest.TestCase):
+    @staticmethod
+    def _ta(own=(), opp=()):
+        return {
+            "own": [i in own for i in (1, 2, 3)],
+            "opp": [i in opp for i in (1, 2, 3)],
+        }
+
+    def test_two_consecutive_reads_record_ta_at_first_time(self):
+        off = self._ta()
+        opp1 = self._ta(opp=(1,))
+        steps = [step(180 - i, ta=off) for i in range(5)]
+        steps += [step(175, ta=opp1), step(174, ta=opp1), step(173, ta=off)]
+        out = run(steps, own_side="ALPHA")
+        self.assertEqual([e for e in out["timeline"] if e[0] == "t"], [["t", 5.0, "b", 1]])
+
+    def test_single_true_is_ignored(self):
+        off = self._ta()
+        opp1 = self._ta(opp=(1,))
+        steps = [step(180 - i, ta=off) for i in range(5)]
+        steps += [step(175, ta=opp1), step(174, ta=off), step(173, ta=opp1), step(172, ta=off)]
+        out = run(steps, own_side="ALPHA")
+        self.assertEqual([e for e in out["timeline"] if e[0] == "t"], [])
+
+    def test_sustained_ta_counted_once_until_two_false_reads(self):
+        off = self._ta()
+        opp1 = self._ta(opp=(1,))
+        steps = [step(180 - i, ta=off) for i in range(5)]          # 0〜4 秒目
+        steps += [step(175 - i, ta=opp1) for i in range(6)]        # 5〜10 秒目: 6 回続けて True
+        steps += [step(169, ta=off), step(168, ta=opp1)]           # 11〜12 秒目: False 1 回だけでは解除されない
+        steps += [step(167, ta=off), step(166, ta=off)]            # 13〜14 秒目: False 2 回で解除
+        steps += [step(165, ta=opp1), step(164, ta=opp1)]          # 15〜16 秒目: 2 回目の展開
+        out = run(steps, own_side="ALPHA")
+        self.assertEqual([e for e in out["timeline"] if e[0] == "t"],
+                         [["t", 5.0, "b", 1], ["t", 15.0, "b", 1]])
+
+    def test_beta_side_maps_own_to_b_and_opp_to_a(self):
+        off = self._ta()
+        both = self._ta(own=(2,), opp=(3,))
+        steps = [step(180 - i, ta=off) for i in range(5)]
+        steps += [step(175, ta=both), step(174, ta=both)]
+        out = run(steps, own_side="BETA")
+        self.assertEqual([e for e in out["timeline"] if e[0] == "t"],
+                         [["t", 5.0, "b", 2], ["t", 5.0, "a", 3]])
+
+    def test_unknown_own_side_omits_ta_events(self):
+        off = self._ta()
+        opp1 = self._ta(opp=(1,))
+        steps = [step(180 - i, ta=off) for i in range(3)]
+        steps += [step(177, ta=opp1), step(176, ta=opp1)]
+        out = run(steps, own_side=None)
+        self.assertEqual([e for e in out["timeline"] if e[0] == "t"], [])
 
 
 class LongMatchTest(unittest.TestCase):
