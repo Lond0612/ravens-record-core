@@ -79,6 +79,12 @@ def _fullscreen_app_running() -> bool:
     return False
 
 
+def client_off_monitor(st: "WindowState") -> bool:
+    """クライアント領域が、モニターの範囲からはみ出しているか"""
+    c, m = st.client, st.monitor_rect
+    return c[0] < m[0] or c[1] < m[1] or c[2] > m[2] or c[3] > m[3]
+
+
 def window_state(hwnd) -> Optional[WindowState]:
     try:
         minimized = bool(win32gui.IsIconic(hwnd))
@@ -432,8 +438,10 @@ class FrameSource:
             self.close()
 
     def _order(self, st: WindowState) -> list[str]:
-        if st.foreground:
+        if st.foreground and not client_off_monitor(st):
             return ["dxgi", "printwindow", "gdi"]
+        # ウィンドウが画面からはみ出している（画面より大きいウィンドウ表示など）: 画面から切り出すと端が欠けて、
+        # 画面の割合がずれる（試合中の表示を読めない）ので、ウィンドウそのものを撮る
         # 裏に回っている: 画面に見えているのは別の窓なので、ウィンドウそのものを撮る方式だけ
         return ["printwindow"]
 

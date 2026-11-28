@@ -40,6 +40,13 @@ PLAYER_POINTS_X = (0.83, 0.99)
 PLAYER_POINTS_Y = (0.38, 0.62)
 # 自分の行の白い枠: 枠の線（上下の辺）の明るさが、ほかの行よりこれ以上明るければ自分の行
 OWN_FRAME_MIN_DIFF = 40.0
+# ランクポイント変動のダイアログが重なると、画面全体が 4 分の 1 ほどに暗くなる（差は 25 ほどに縮む）。
+# そのときは、ほかの行よりこの倍率以上明るく、差がこれ以上なら自分の行（ふだんの枠のない行どうしは 1.1 倍ほど、枠のある行は 1.8〜1.9 倍）
+OWN_FRAME_MIN_RATIO = 1.5
+OWN_FRAME_MIN_DIFF_DIM = 12.0
+# マップの名前の欄: いちばん明るいところ（文字）がこれより暗ければ、ダイアログで暗くなっているので、明るさを引き伸ばしてから読む
+MAP_DIM_MAX = 150.0
+MAP_STRETCH_TO = 230.0
 
 
 @dataclass
@@ -54,6 +61,12 @@ class TeamResult:
     map_match: Optional[str] = None                   # 照合したマップの名前（日本語の表記）
     map_score: float = 0.0
     map_lang: Optional[str] = None
+
+    @property
+    def voided(self) -> bool:
+        """対戦が無効になった（回線の切断など。リザルト画面に「対戦が無効となりました」と出て、両陣営とも DRAW・0PT）。
+        本当の試合が 0 対 0 で終わることは無いので、両陣営の合計が 0 と読めたら無効とみなす"""
+        return all(self.points.get(s) == 0 for s in SIDES)
 
     @property
     def complete(self) -> bool:
@@ -174,6 +187,11 @@ def _frame_brightness(cell: np.ndarray) -> float:
     return float(min(top, bottom))
 
 
+def _is_own_frame(top: float, second: float) -> bool:
+    """いちばん明るい枠の行が、2 番目よりはっきり明るいか（暗くなっていても、比は変わらない）"""
+    return top - second >= OWN_FRAME_MIN_DIFF or (top - second >= OWN_FRAME_MIN_DIFF_DIM and top >= second * OWN_FRAME_MIN_RATIO)
+
+
 def _find_own_row(frame: np.ndarray) -> tuple[Optional[str], Optional[np.ndarray]]:
     """白い枠の付いた行（自分の行）の (陣営, 行の画像)。見つからなければ (None, None)"""
     cells = []
@@ -186,7 +204,7 @@ def _find_own_row(frame: np.ndarray) -> tuple[Optional[str], Optional[np.ndarray
     if len(cells) < 2:
         return None, None
     cells.sort(key=lambda c: c[1], reverse=True)
-    if cells[0][1] - cells[1][1] < OWN_FRAME_MIN_DIFF:
+    if not _is_own_frame(cells[0][1], cells[1][1]):
         return None, None
     side, _, cell = cells[0]
     return side, cell
@@ -198,10 +216,20 @@ def _player_points(cell: np.ndarray) -> Optional[int]:
     return parse_points(_ocr_digits(part))
 
 
+def _stretch_dim(img: np.ndarray) -> np.ndarray:
+    """ダイアログで暗くなった欄の明るさを、文字がふだんの明るさになるよう引き伸ばす（暗くなっていなければそのまま）"""
+    if img.size == 0:
+        return img
+    peak = float(np.percentile(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), 99.5))
+    if peak >= MAP_DIM_MAX or peak <= 0:
+        return img
+    return cv2.convertScaleAbs(img, alpha=MAP_STRETCH_TO / peak)
+
+
 def read_map(frame: np.ndarray) -> tuple[str, Optional[str], float, Optional[str]]:
     """マップの名前を読み、既知のマップ（カスタムマッチのルームと同じ一覧・3 言語）と照らし合わせる。
     (読んだ文字, 照合した日本語の表記, 近さ, ゲームの言語)"""
-    img = _box(frame, *MAP_BOX)
+    img = _stretch_dim(_box(frame, *MAP_BOX))
     best = ("", None, 0.0, None)
     for lang, tess in custom_match.OCR_LANGS.items():
         for threshold in (150, 110):

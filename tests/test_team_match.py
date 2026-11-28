@@ -156,5 +156,33 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.hooks.calls, ["started", ("ended", False)])
 
 
+class DimmedResultTest(unittest.TestCase):
+    """ランクポイント変動のダイアログで暗くなったリザルト画面"""
+
+    def test_own_frame(self):
+        self.assertTrue(team_match._is_own_frame(207.9, 110.0))   # ふだん
+        self.assertTrue(team_match._is_own_frame(53.0, 29.2))     # 暗くなったとき（差 24・比 1.8）
+        self.assertFalse(team_match._is_own_frame(110.0, 103.7))  # 枠のない行どうし
+        self.assertFalse(team_match._is_own_frame(29.2, 25.8))
+        self.assertFalse(team_match._is_own_frame(12.0, 5.0))     # 真っ暗（差が小さい）
+
+    def test_voided(self):
+        r = TeamResult(points={"ALPHA": 0, "BETA": 0})
+        self.assertTrue(r.voided)
+        self.assertFalse(TeamResult(points={"ALPHA": 0, "BETA": 120}).voided)
+        self.assertFalse(TeamResult(points={"ALPHA": None, "BETA": 0}).voided)
+        self.assertFalse(TeamResult().voided)
+
+    def test_stretch_dim(self):
+        import numpy as np
+        dim = np.full((20, 40, 3), 20, np.uint8)
+        dim[5:15, 10:30] = 55   # 暗くなった文字
+        out = team_match._stretch_dim(dim)
+        self.assertGreaterEqual(int(out.max()), 200)
+        bright = dim.copy()
+        bright[5:15, 10:30] = 220
+        self.assertIs(team_match._stretch_dim(bright), bright)
+
+
 if __name__ == "__main__":
     unittest.main()
