@@ -65,7 +65,7 @@ class TeamResult:
     @property
     def voided(self) -> bool:
         """対戦が無効になった（回線の切断など。リザルト画面に「対戦が無効となりました」と出て、両陣営とも DRAW・0PT）。
-        本当の試合が 0 対 0 で終わることは無いので、両陣営の合計が 0 と読めたら無効とみなす"""
+        本当の試合が 0 対 0 で終わることは無いので、両陣営の合計が 0 と読めたら無効とみなす（記録は DRAW 0-0 のまま残す）"""
         return all(self.points.get(s) == 0 for s in SIDES)
 
     @property

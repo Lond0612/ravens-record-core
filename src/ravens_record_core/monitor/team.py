@@ -157,10 +157,7 @@ def _record(ctx: MonitorContext) -> dict | None:
         return None
     result, banner, hud_side = ended
     if result is not None and result.voided:
-        log("[チーム戦] 対戦が無効になりました（両陣営とも 0PT）。記録しません。")
-        if debug:
-            debug.finish(None)
-        return None
+        log("[チーム戦] 対戦が無効になりました（両陣営とも 0PT）。DRAW 0-0 として記録します。")
     ended_at = datetime.now().astimezone()
     ctx.set_status("post_match", "チーム戦の対戦が終了しました。結果を保存しています", "status.teamPostMatch")
 
